@@ -7,7 +7,7 @@ org.freedesktop.impl.portal.desktop.gnome (see ui/screenshot.js,
 DBusSenderChecker). In a sandbox session gsd-media-keys is not running, so
 we can legitimately own the media-keys name and call from there.
 
-Usage: screenshot-helper.py OUTPUT.png
+Usage: screenshot-helper.py OUTPUT.png [--cursor]
 """
 import sys
 
@@ -17,10 +17,11 @@ BUS_NAME = "org.gnome.SettingsDaemon.MediaKeys"
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
+    if len(sys.argv) < 2:
         print(__doc__, file=sys.stderr)
         return 2
     output = sys.argv[1]
+    cursor = "--cursor" in sys.argv[2:]
 
     bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
     loop = GLib.MainLoop()
@@ -33,7 +34,7 @@ def main() -> int:
                 "/org/gnome/Shell/Screenshot",
                 "org.gnome.Shell.Screenshot",
                 "Screenshot",
-                GLib.Variant("(bbs)", (False, False, output)),
+                GLib.Variant("(bbs)", (cursor, False, output)),
                 GLib.VariantType("(bs)"),
                 Gio.DBusCallFlags.NONE,
                 30000,

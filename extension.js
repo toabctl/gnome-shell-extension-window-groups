@@ -23,6 +23,7 @@ import * as Layout from 'resource:///org/gnome/shell/ui/layout.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import {computeLayout, resizeToState} from './layouts.js';
+import {rankWindows} from './search.js';
 
 const ICON_SIZE = 18;
 const COMPACT_ICON_SIZE = 24;
@@ -30,6 +31,8 @@ const REVEAL_TIMEOUT = 1000;
 const SLIDE_DURATION = 200;
 const HIDE_DELAY = 400;
 const TOOLTIP_DELAY = 450;
+const HOVER_EXPAND_DELAY = 180;
+const HOVER_COLLAPSE_DELAY = 300;
 
 /** Every grab op that means "the user resized this window". */
 const RESIZE_GRAB_OPS = new Set([
@@ -1003,6 +1006,268 @@ class GroupSection extends St.BoxLayout {
 });
 
 /* -------------------------------------------------------------------------
+ * Window search
+ * ---------------------------------------------------------------------- */
+
+const SearchResult = GObject.registerClass(
+class SearchResult extends St.Button {
+    _init(entry) {
+        super._init({
+            style_class: 'wg-search-result',
+            x_expand: true,
+            can_focus: true,
+            track_hover: true,
+        });
+        this.entry = entry;
+
+        const box = new St.BoxLayout({
+            orientation: Clutter.Orientation.HORIZONTAL,
+            style_class: 'wg-search-result-box',
+            x_expand: true,
+        });
+        this.set_child(box);
+
+        const app = Shell.WindowTracker.get_default().get_window_app(entry.win);
+        box.add_child(app
+            ? app.create_icon_texture(24)
+            : new St.Icon({icon_name: 'application-x-executable-symbolic', icon_size: 24}));
+
+        const text = new St.BoxLayout({
+            orientation: Clutter.Orientation.VERTICAL,
+            x_expand: true,
+            style_class: 'wg-search-result-text',
+        });
+        const title = new St.Label({
+            text: entry.title, style_class: 'wg-search-title',
+            x_align: Clutter.ActorAlign.START,
+        });
+        title.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+        text.add_child(title);
+
+        // Chrome's second line is "<group dot> group . site . age"; ours is
+        // the group and the application, which is the equivalent context.
+        const sub = new St.BoxLayout({
+            orientation: Clutter.Orientation.HORIZONTAL,
+            style_class: 'wg-search-sub',
+        });
+        const dot = new St.Widget({style_class: 'wg-search-dot'});
+        dot.style = `background-color: ${entry.color};`;
+        sub.add_child(dot);
+        const subLabel = new St.Label({
+            text: `${entry.group}  ·  ${entry.app}`,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        subLabel.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+        sub.add_child(subLabel);
+        text.add_child(sub);
+        box.add_child(text);
+
+        const close = new St.Button({
+            style_class: 'wg-search-close',
+            child: new St.Icon({icon_name: 'window-close-symbolic', icon_size: 14}),
+        });
+        close.connect('clicked', () => entry.win.delete(global.get_current_time()));
+        box.add_child(close);
+    }
+
+    setSelected(selected) {
+        if (selected)
+            this.add_style_class_name('wg-search-selected');
+        else
+            this.remove_style_class_name('wg-search-selected');
+    }
+});
+class WindowSearch {
+    constructor(model, tags) {
+        this._model = model;
+        this._tags = tags;
+        this._grab = null;
+        this._results = [];
+        this._selected = 0;
+    }
+
+    destroy() {
+        this.close();
+    }
+
+    get isOpen() {
+        return this._grab !== null;
+    }
+
+    toggle() {
+        if (this.isOpen)
+            this.close();
+        else
+            this.open();
+    }
+
+    open() {
+        if (this.isOpen)
+            return;
+
+        this._container = new St.BoxLayout({
+            orientation: Clutter.Orientation.VERTICAL,
+            style_class: 'wg-search',
+            reactive: true,
+            can_focus: true,
+        });
+
+        this._entry = new St.Entry({
+            style_class: 'wg-search-entry',
+            hint_text: 'Search windows',
+            can_focus: true,
+            x_expand: true,
+        });
+        this._entry.set_primary_icon(
+            new St.Icon({icon_name: 'edit-find-symbolic', icon_size: 16}));
+        this._container.add_child(this._entry);
+
+        this._container.add_child(new St.Label({
+            text: 'Open windows', style_class: 'wg-search-heading',
+        }));
+
+        this._scroll = new St.ScrollView({
+            style_class: 'wg-search-scroll',
+            hscrollbar_policy: St.PolicyType.NEVER,
+            vscrollbar_policy: St.PolicyType.AUTOMATIC,
+            y_expand: true,
+        });
+        this._list = new St.BoxLayout({
+            orientation: Clutter.Orientation.VERTICAL, x_expand: true,
+        });
+        this._scroll.child = this._list;
+        this._container.add_child(this._scroll);
+
+        Main.layoutManager.addTopChrome(this._container);
+        this._position();
+
+        this._entry.clutter_text.connect('text-changed', () => this._refresh());
+        this._entry.clutter_text.connect('key-press-event',
+            (a, event) => this._onKeyPress(event));
+
+        this._grab = Main.pushModal(this._container, {
+            actionMode: Shell.ActionMode.NORMAL,
+        });
+        global.stage.set_key_focus(this._entry.clutter_text);
+        this._refresh();
+    }
+
+    close() {
+        if (!this.isOpen)
+            return;
+        Main.popModal(this._grab);
+        this._grab = null;
+        Main.layoutManager.removeChrome(this._container);
+        this._container.destroy();
+        this._container = null;
+        this._results = [];
+    }
+
+    _position() {
+        const monitor = Main.layoutManager.primaryMonitor;
+        const top = Main.layoutManager.panelBox.height;
+        const width = Math.min(520, Math.round(monitor.width * 0.4));
+        const height = Math.min(640, Math.round(monitor.height * 0.7));
+        this._container.set_size(width, height);
+        this._container.set_position(
+            monitor.x + Math.round((monitor.width - width) / 2),
+            monitor.y + top + 40);
+    }
+
+    _entries() {
+        const out = [];
+        for (let g = 0; g < this._model.count; g++) {
+            const color = this._model.color(g);
+            const group = this._model.name(g);
+            for (const win of this._model.windows(g)) {
+                const app = Shell.WindowTracker.get_default().get_window_app(win);
+                out.push({
+                    win,
+                    title: win.get_title() ?? '',
+                    app: app?.get_name() ?? win.get_wm_class() ?? '',
+                    group,
+                    color: color.hex,
+                });
+            }
+        }
+        return out;
+    }
+
+    _refresh() {
+        const query = this._entry.get_text();
+        this._list.destroy_all_children();
+        this._results = [];
+
+        const scored = rankWindows(query, this._entries());
+
+        if (scored.length === 0) {
+            this._list.add_child(new St.Label({
+                text: 'No windows match', style_class: 'wg-search-empty',
+            }));
+            return;
+        }
+
+        for (const e of scored) {
+            const row = new SearchResult(e);
+            row.connect('clicked', () => {
+                const win = e.win;
+                this.close();
+                win.activate(global.get_current_time());
+            });
+            this._list.add_child(row);
+            this._results.push(row);
+        }
+        this._selected = 0;
+        this._updateSelection();
+    }
+
+    _updateSelection() {
+        this._results.forEach((r, i) => r.setSelected(i === this._selected));
+    }
+
+    _move(delta) {
+        if (this._results.length === 0)
+            return;
+        this._selected =
+            (this._selected + delta + this._results.length) % this._results.length;
+        this._updateSelection();
+        // Keep the selection in view without stealing focus from the entry.
+        const row = this._results[this._selected];
+        const adj = this._scroll.vadjustment;
+        const y = row.allocation.y1;
+        if (y < adj.value)
+            adj.value = y;
+        else if (y + row.height > adj.value + adj.page_size)
+            adj.value = y + row.height - adj.page_size;
+    }
+
+    _onKeyPress(event) {
+        switch (event.get_key_symbol()) {
+        case Clutter.KEY_Escape:
+            this.close();
+            return Clutter.EVENT_STOP;
+        case Clutter.KEY_Down:
+            this._move(1);
+            return Clutter.EVENT_STOP;
+        case Clutter.KEY_Up:
+            this._move(-1);
+            return Clutter.EVENT_STOP;
+        case Clutter.KEY_Return:
+        case Clutter.KEY_KP_Enter: {
+            const row = this._results[this._selected];
+            if (row) {
+                const win = row.entry.win;
+                this.close();
+                win.activate(global.get_current_time());
+            }
+            return Clutter.EVENT_STOP;
+        }
+        }
+        return Clutter.EVENT_PROPAGATE;
+    }
+}
+
+/* -------------------------------------------------------------------------
  * Sidebar
  * ---------------------------------------------------------------------- */
 
@@ -1036,6 +1301,12 @@ class Sidebar {
             x_expand: true,
         });
         toggleRow.add_child(this._toggle);
+
+        this._searchButton = iconButton('edit-find-symbolic',
+            'Search windows', 'wg-icon-button wg-toggle');
+        this._searchButton.connect('clicked', () => this.search?.toggle());
+        toggleRow.add_child(this._searchButton);
+
         this.actor.add_child(toggleRow);
 
         this._scroll = new St.ScrollView({
@@ -1058,33 +1329,41 @@ class Sidebar {
             x_expand: true,
             can_focus: true,
             track_hover: true,
-            child: this._compact
-                ? new St.Icon({icon_name: 'list-add-symbolic', icon_size: 16})
-                : new St.Label({text: '+  New group', x_align: Clutter.ActorAlign.CENTER}),
+            child: new St.Label({text: '+  New group', x_align: Clutter.ActorAlign.CENTER}),
         });
-        if (this._compact)
-            addTooltip(newGroup, 'New group');
         newGroup.connect('clicked', () => this._model.addGroup());
         this.actor.add_child(newGroup);
 
         this._autoHide = this._settings.get_boolean('auto-hide');
         this._revealed = !this._autoHide;
         this._hideTimeoutId = 0;
+        this._hoverId = 0;
+        this._hoverExpanded = false;
 
-        // A hidden sidebar must not keep reserving space, or hiding it gains
-        // nothing: the windows would stay pushed to the right regardless.
+        // Reserved space and visible width are deliberately different actors.
+        // Expanding on hover must draw *over* the windows: if the strut grew
+        // with the sidebar, every window on screen would resize each time the
+        // pointer brushed the edge. A hidden or compact sidebar reserves only
+        // what it occupies when not hovered.
+        this._strut = new St.Widget({reactive: false});
+        Main.layoutManager.addChrome(this._strut, {
+            affectsStruts: true,
+            trackFullscreen: true,
+        });
         Main.layoutManager.addChrome(this.actor, {
-            affectsStruts: !this._autoHide,
+            affectsStruts: false,
             trackFullscreen: true,
         });
 
         this.actor.connect('enter-event', () => {
             this._cancelHide();
+            this._queueHoverExpand(true);
             return Clutter.EVENT_PROPAGATE;
         });
         this.actor.connect('leave-event', () => {
             if (this._autoHide)
                 this._queueHide();
+            this._queueHoverExpand(false);
             return Clutter.EVENT_PROPAGATE;
         });
 
@@ -1211,12 +1490,19 @@ class Sidebar {
             this._rebuildId = 0;
         }
         this._cancelHide();
+        if (this._hoverId) {
+            GLib.source_remove(this._hoverId);
+            this._hoverId = 0;
+        }
         this._teardownBarrier();
         DND.removeDragMonitor(this._dragMonitor);
         for (const win of this._trackedWindows)
             win.disconnectObject(this);
         this._trackedWindows.clear();
         Main.layoutManager.removeChrome(this.actor);
+        Main.layoutManager.removeChrome(this._strut);
+        this._strut.destroy();
+        this._strut = null;
         this.actor.destroy();
         this.actor = null;
     }
@@ -1252,6 +1538,34 @@ class Sidebar {
         this.queueRebuild();
     }
 
+    /** Compact for rendering purposes. Differs from the setting while the
+     *  pointer is expanding the sidebar over the windows. */
+    _effectiveCompact() {
+        return this._compact && !this._hoverExpanded;
+    }
+
+    _queueHoverExpand(wanted) {
+        if (!this._compact || !this._settings.get_boolean('expand-on-hover'))
+            return;
+        if (this._hoverId) {
+            GLib.source_remove(this._hoverId);
+            this._hoverId = 0;
+        }
+        if (wanted === this._hoverExpanded)
+            return;
+        const delay = wanted ? HOVER_EXPAND_DELAY : HOVER_COLLAPSE_DELAY;
+        this._hoverId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
+            this._hoverId = 0;
+            // The pointer may have left again while we waited.
+            if (wanted && !this.actor.has_pointer)
+                return GLib.SOURCE_REMOVE;
+            this._hoverExpanded = wanted;
+            this.updateGeometry();
+            this.rebuild();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
     relayout(index) {
         if (index === undefined || index === null || index < 0)
             this._arranger.scheduleAll();
@@ -1264,15 +1578,21 @@ class Sidebar {
         if (!monitor)
             return;
         const top = Main.layoutManager.panelBox.height;
-        const width = this._compact
+        const reserved = this._compact
             ? this._settings.get_int('compact-width')
             : this._settings.get_int('sidebar-width');
+        const visible = this._effectiveCompact()
+            ? this._settings.get_int('compact-width')
+            : this._settings.get_int('sidebar-width');
+
         // x1 <= monitor.x is what makes layout.js classify this as a
         // Meta.Side.LEFT strut, so the work area shrinks for real.
+        this._strut.set_position(monitor.x, monitor.y + top);
+        this._strut.set_size(this._autoHide ? 0 : reserved, monitor.height - top);
         this.actor.set_position(monitor.x, monitor.y + top);
-        this.actor.set_size(width, monitor.height - top);
+        this.actor.set_size(visible, monitor.height - top);
         if (this._autoHide && !this._revealed)
-            this.actor.translation_x = -width;
+            this.actor.translation_x = -visible;
     }
 
     queueRebuild() {
@@ -1292,7 +1612,7 @@ class Sidebar {
         const focus = global.display.focus_window;
 
         for (let i = 0; i < this._model.count; i++) {
-            const section = new GroupSection(i, this._model, this, this._compact);
+            const section = new GroupSection(i, this._model, this, this._effectiveCompact());
             this._groupBox.add_child(section);
             this._sections.push(section);
 
@@ -1353,8 +1673,15 @@ export default class WindowGroupsExtension extends Extension {
         this._model = new GroupModel(this._settings);
         this._arranger = new Arranger(this._model);
         this._tags = new TagStore();
+        this._search = new WindowSearch(this._model, this._tags);
         this._sidebar = new Sidebar(
             this._model, this._arranger, this._settings, this._tags);
+        this._sidebar.search = this._search;
+
+        Main.wm.addKeybinding('search-windows', this._settings,
+            Meta.KeyBindingFlags.NONE,
+            Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW,
+            () => this._search.toggle());
 
         global.display.connectObject(
             'window-created', (display, win) => {
@@ -1428,6 +1755,7 @@ export default class WindowGroupsExtension extends Extension {
             // follows the actor's allocation, so a full rebuild is simplest.
             'changed::compact', () => this._reloadSidebar(),
             'changed::compact-width', () => this._sidebar.updateGeometry(),
+            'changed::expand-on-hover', () => this._reloadSidebar(),
             // The header buttons call queueRebuild() themselves, but a write
             // from outside (gsettings, a prefs dialog, a second monitor of
             // the same key) would otherwise not be picked up until some
@@ -1452,9 +1780,13 @@ export default class WindowGroupsExtension extends Extension {
         this._sidebar?.destroy();
         this._sidebar = new Sidebar(
             this._model, this._arranger, this._settings, this._tags);
+        this._sidebar.search = this._search;
     }
 
     disable() {
+        Main.wm.removeKeybinding('search-windows');
+        this._search?.destroy();
+        this._search = null;
         global.display.disconnectObject(this);
         global.workspace_manager.disconnectObject(this);
         Main.layoutManager.disconnectObject(this);

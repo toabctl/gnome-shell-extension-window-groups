@@ -78,6 +78,37 @@ The strut follows the actor's allocation (layout.js reconnects on
 `notify::allocation`), so the work area shrinks and grows with the sidebar
 without re-registering the chrome.
 
+## Window search
+
+`Super+Shift+A`, or the magnifier next to the collapse toggle, opens a search
+popup: type to filter every open window by title, application or group. Each
+result shows the window's group as a coloured dot, exactly as Chrome's tab
+search does. Up/Down to move, Enter to activate, Escape to dismiss, and an ×
+on each row to close that window.
+
+The shortcut is not Chrome's `Ctrl+Shift+A`: a global grab would take that
+combination away from every application. Change it with the `search-windows`
+key.
+
+Ranking lives in `search.js` — no GNOME imports, so `node --test
+search.test.mjs` covers it. A hit in the title beats one in the application
+name, which beats one in the group name; within a field, earlier hits rank
+higher. The position term is `at / (at + 100)`, which is monotonic and
+provably in [0, 1), so it can never cross a field penalty step however long a
+title gets.
+
+## Hover to expand
+
+While compact, moving the pointer onto the sidebar expands it over the
+windows and it collapses again when the pointer leaves
+(`expand-on-hover`, on by default).
+
+The expansion deliberately does *not* change the work area. Reserved space and
+visible width are separate actors: an invisible strut actor holds the compact
+width, while the visible sidebar is registered with `affectsStruts: false`. If
+the strut grew too, every window on screen would resize each time the pointer
+brushed the edge.
+
 ## Auto-hide
 
     gsettings set org.gnome.shell.extensions.window-groups auto-hide true
@@ -251,3 +282,27 @@ the resize-clamp test passed even with the clamp deleted, because
   the same reason tags cannot.
 - A competing tiler will fight this. `tiling-assistant@ubuntu.com` ships
   enabled on Ubuntu and must be disabled.
+
+
+## Driving the guest
+
+`guest-input.py` creates uinput devices in the VM, so keybindings, typing,
+pointer motion and clicks can be exercised from outside the session. GNOME
+Shell has no scriptable input path and X11 tools only reach XWayland clients,
+so this is the only way to test the interactive parts.
+
+    lxc exec wg-vm -- python3 /root/guest-input.py key super+shift+a type disk key return
+    lxc exec wg-vm -- python3 /root/guest-input.py move 26,500 click left
+
+Three things it has to get right, each of which silently produced "nothing
+happens" while being debugged:
+
+- **Two devices, not one.** libinput classifies a device declaring both a full
+  keyboard and relative axes as a keyboard, and never gives it a pointer.
+- **Step size.** Moving 25px in 60 steps rounds to zero per step, so that axis
+  never moves.
+- **Keep it alive.** Destroying the uinput device drops pointer focus, so the
+  screenshot has to happen while the process is still running.
+
+`spice-vdagentd` must be stopped first: its absolute tablet keeps asserting a
+position and overrides relative motion.

@@ -10,9 +10,18 @@
       <default>[]</default>
       <summary>Per-group arrangement, parallel to workspace index: "free" or "tabbed"</summary>
     </key>
+    <key name="search-windows" type="as">
+      <default><![CDATA[['<Super><Shift>a']]]></default>
+      <summary>Open the window search popup</summary>
+      <description>Chrome uses Ctrl+Shift+A, but that belongs to applications; a global grab would take it away from them.</description>
+    </key>
     <key name="compact" type="b">
       <default>false</default>
       <summary>Shrink the sidebar to icons only, like Chrome's collapsed vertical tabs</summary>
+    </key>
+    <key name="expand-on-hover" type="b">
+      <default>true</default>
+      <summary>While compact, expand the sidebar over the windows when the pointer is on it</summary>
     </key>
     <key name="compact-width" type="i">
       <default>52</default>

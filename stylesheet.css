@@ -183,3 +183,75 @@
 .wg-compact-row .wg-window-row-content {
     spacing: 0;
 }
+
+/* ---- window search ---------------------------------------------------- */
+
+.wg-search {
+    background-color: rgba(28, 28, 30, 0.98);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
+    padding: 10px;
+    spacing: 6px;
+}
+
+.wg-search-entry {
+    font-size: 1.05em;
+    padding: 6px 8px;
+}
+
+.wg-search-heading {
+    font-size: 0.8em;
+    font-weight: bold;
+    color: rgba(255, 255, 255, 0.55);
+    padding: 4px 4px 0 4px;
+}
+
+.wg-search-result {
+    border-radius: 8px;
+    padding: 6px 8px;
+}
+
+.wg-search-result:hover,
+.wg-search-selected {
+    background-color: rgba(255, 255, 255, 0.13);
+}
+
+.wg-search-result-box {
+    spacing: 10px;
+}
+
+.wg-search-result-text {
+    spacing: 1px;
+}
+
+.wg-search-title {
+    color: #ffffff;
+}
+
+.wg-search-sub {
+    spacing: 6px;
+    font-size: 0.8em;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.wg-search-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+}
+
+.wg-search-close {
+    padding: 4px;
+    border-radius: 6px;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.wg-search-close:hover {
+    background-color: rgba(255, 255, 255, 0.18);
+    color: #ffffff;
+}
+
+.wg-search-empty {
+    padding: 14px;
+    color: rgba(255, 255, 255, 0.5);
+}
