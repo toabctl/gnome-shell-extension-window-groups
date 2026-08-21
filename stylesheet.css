@@ -137,3 +137,24 @@
 .wg-group {
     border-left: 3px solid transparent;
 }
+
+.wg-tag-chip {
+    font-size: 0.75em;
+    padding: 1px 5px;
+    margin-left: 4px;
+    border-radius: 999px;
+    background-color: rgba(255, 255, 255, 0.16);
+    color: rgba(255, 255, 255, 0.85);
+}
+
+/* Manual tags live only for this session; make that visible rather than
+   letting them look as durable as rule-derived ones. */
+.wg-tag-chip-manual {
+    background-color: transparent;
+    border: 1px dashed rgba(255, 255, 255, 0.45);
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.wg-tag-entry {
+    font-size: 0.85em;
+}

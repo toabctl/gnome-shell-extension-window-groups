@@ -34,6 +34,38 @@ Real tiling is a much larger problem and is best delegated to an existing
 tiling extension (Forge has per-container `HSPLIT`/`VSPLIT`/`STACKED`/`TABBED`
 already) rather than reimplemented here.
 
+## Tags and automatic groups
+
+A window's tags come from two places:
+
+- **Rules** (`tag-rules`, a JSON array), matched against `wm_class`,
+  `instance`, `app_id` or `title` with a case-insensitive regex:
+
+      gsettings set org.gnome.shell.extensions.window-groups tag-rules \
+        '[{"field":"wm_class","pattern":"calculator","tag":"Maths"}]'
+
+- **Manual tags**, by right-clicking a window row and typing a
+  comma-separated list. These take precedence over rules.
+
+With `auto-group` on (the default), a new window is moved into the group
+named after its first tag, creating that group if it does not exist — it
+reuses an unnamed empty group before appending a new one, and stops at 16
+groups. A window is auto-assigned once, so dragging it elsewhere afterwards
+sticks.
+
+**Manual tags do not survive logout.** Mutter exposes no persistent
+per-window identity (`get_id()` and `get_stable_sequence()` are
+session-scoped), so per-instance tags cannot be re-attached to the same
+window after a restart. This is the same reason i3 and sway only offer
+rule-based `assign`/`for_window`. Manual tags render with a dashed outline to
+make that visible rather than silent; anything you want to keep belongs in a
+rule.
+
+A window has exactly one group because a window has exactly one workspace.
+Tags are therefore an assignment mechanism, not a many-to-many relation — a
+window showing under two tag sections at once would require dropping
+workspaces as the backing store.
+
 ## Usage
 
 - Click a window row → focus that window (switching group if needed).

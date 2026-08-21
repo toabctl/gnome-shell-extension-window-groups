@@ -99,8 +99,13 @@ class GroupModel {
     }
 
     name(index) {
-        const names = this._wmPrefs.get_strv('workspace-names');
-        return names[index]?.trim() || `Group ${index + 1}`;
+        return this.rawName(index) || `Group ${index + 1}`;
+    }
+
+    /** The stored name, empty if the group has never been named. `name()`
+     *  substitutes a placeholder; this does not. */
+    rawName(index) {
+        return this._wmPrefs.get_strv('workspace-names')[index]?.trim() ?? '';
     }
 
     setName(index, name) {
@@ -150,6 +155,40 @@ class GroupModel {
         return ws.list_windows()
             .filter(isManagedWindow)
             .sort((a, b) => a.get_stable_sequence() - b.get_stable_sequence());
+    }
+
+    indexOfName(name) {
+        const wanted = name.trim().toLowerCase();
+        for (let i = 0; i < this.count; i++) {
+            if (this.name(i).trim().toLowerCase() === wanted)
+                return i;
+        }
+        return -1;
+    }
+
+    /** Return the index of the group called `name`, creating it if needed.
+     *  Returns -1 if the cap would be exceeded. */
+    ensureGroupNamed(name, cap) {
+        const existing = this.indexOfName(name);
+        if (existing !== -1)
+            return existing;
+
+        // Reuse an unnamed, empty group before appending. Static workspaces
+        // GNOME created up front would otherwise linger as empty clutter
+        // above every auto-created group.
+        for (let i = 0; i < this.count; i++) {
+            if (this.rawName(i) === '' && this.windows(i).length === 0) {
+                this.setName(i, name);
+                return i;
+            }
+        }
+
+        if (this.count >= cap)
+            return -1;
+        this.addGroup();
+        const index = this.count - 1;
+        this.setName(index, name);
+        return index;
     }
 
     addGroup() {
@@ -221,6 +260,93 @@ class GroupModel {
 }
 
 /* -------------------------------------------------------------------------
+ * Tags
+ * ---------------------------------------------------------------------- */
+
+const TAG_FIELDS = {
+    wm_class: win => win.get_wm_class(),
+    instance: win => win.get_wm_class_instance(),
+    app_id: win => win.get_gtk_application_id() ?? win.get_sandboxed_app_id(),
+    title: win => win.get_title(),
+};
+
+/** Cap on groups the engine will create by itself, so a sloppy rule cannot
+ *  spawn workspaces without bound. */
+const MAX_AUTO_GROUPS = 16;
+
+class TagEngine {
+    constructor(settings) {
+        this._settings = settings;
+        // Manual tags are keyed on the live Meta.Window. Mutter exposes no
+        // persistent per-window id — get_id() and get_stable_sequence() are
+        // session-scoped — so these deliberately do not outlive the session.
+        this._manual = new Map();
+    }
+
+    destroy() {
+        this._manual.clear();
+        this._settings = null;
+    }
+
+    rules() {
+        let parsed;
+        try {
+            parsed = JSON.parse(this._settings.get_string('tag-rules'));
+        } catch (e) {
+            logError(e, 'window-groups: tag-rules is not valid JSON');
+            return [];
+        }
+        if (!Array.isArray(parsed))
+            return [];
+        return parsed.filter(r => r && TAG_FIELDS[r.field] && r.pattern && r.tag);
+    }
+
+    ruleTags(win) {
+        const tags = [];
+        for (const rule of this.rules()) {
+            const value = TAG_FIELDS[rule.field](win);
+            if (!value)
+                continue;
+            let re;
+            try {
+                re = new RegExp(rule.pattern, 'i');
+            } catch (e) {
+                continue;
+            }
+            if (re.test(value) && !tags.includes(rule.tag))
+                tags.push(rule.tag);
+        }
+        return tags;
+    }
+
+    manualTags(win) {
+        return [...(this._manual.get(win) ?? [])];
+    }
+
+    setManualTags(win, tags) {
+        const cleaned = tags.map(t => t.trim()).filter(t => t.length > 0);
+        if (cleaned.length)
+            this._manual.set(win, new Set(cleaned));
+        else
+            this._manual.delete(win);
+    }
+
+    forget(win) {
+        this._manual.delete(win);
+    }
+
+    /** Manual tags win, so hand-tagging can override a rule. */
+    tags(win) {
+        const manual = this.manualTags(win);
+        return [...manual, ...this.ruleTags(win).filter(t => !manual.includes(t))];
+    }
+
+    primaryTag(win) {
+        return this.tags(win)[0] ?? null;
+    }
+}
+
+/* -------------------------------------------------------------------------
  * Arranger: applies a group's arrangement
  * ---------------------------------------------------------------------- */
 
@@ -275,7 +401,7 @@ function iconButton(iconName, accessibleName, styleClass = 'wg-icon-button') {
 
 const WindowRow = GObject.registerClass(
 class WindowRow extends St.Button {
-    _init(win) {
+    _init(win, sidebar) {
         super._init({
             style_class: 'wg-window-row',
             x_expand: true,
@@ -284,6 +410,7 @@ class WindowRow extends St.Button {
         });
 
         this._win = win;
+        this._sidebar = sidebar;
         // DND resolves drop targets by walking up the actor tree looking
         // for a _delegate; ours only acts as a drag *source*.
         this._delegate = this;
@@ -309,6 +436,22 @@ class WindowRow extends St.Button {
         box.add_child(this._label);
         this.updateTitle();
 
+        this._box = box;
+        const tags = sidebar?.tags;
+        if (tags) {
+            const manual = tags.manualTags(win);
+            for (const tag of tags.tags(win)) {
+                const chip = new St.Label({
+                    text: tag,
+                    style_class: manual.includes(tag)
+                        ? 'wg-tag-chip wg-tag-chip-manual'
+                        : 'wg-tag-chip',
+                    y_align: Clutter.ActorAlign.CENTER,
+                });
+                box.add_child(chip);
+            }
+        }
+
         this._draggable = DND.makeDraggable(this, {dragActorOpacity: 200});
         this._draggable.connect('drag-begin',
             () => this.add_style_class_name('wg-dragging'));
@@ -318,6 +461,48 @@ class WindowRow extends St.Button {
             () => this.remove_style_class_name('wg-dragging'));
 
         this.connect('clicked', () => this._win.activate(global.get_current_time()));
+        this.connect('button-press-event', (actor, event) => {
+            if (event.get_button() === Clutter.BUTTON_SECONDARY) {
+                this._editTags();
+                return Clutter.EVENT_STOP;
+            }
+            return Clutter.EVENT_PROPAGATE;
+        });
+    }
+
+    _editTags() {
+        const tags = this._sidebar?.tags;
+        if (!tags)
+            return;
+
+        const entry = new St.Entry({
+            style_class: 'wg-tag-entry',
+            text: tags.manualTags(this._win).join(', '),
+            x_expand: true,
+        });
+        this._label.hide();
+        this._box.insert_child_at_index(entry, 1);
+
+        const finish = commit => {
+            if (commit) {
+                tags.setManualTags(this._win, entry.get_text().split(','));
+                this._sidebar.autoAssign(this._win, true);
+            }
+            this._sidebar.queueRebuild();
+        };
+
+        entry.clutter_text.connect('activate', () => finish(true));
+        entry.clutter_text.connect('key-focus-out', () => finish(false));
+        entry.clutter_text.connect('key-press-event', (a, event) => {
+            if (event.get_key_symbol() === Clutter.KEY_Escape) {
+                finish(false);
+                return Clutter.EVENT_STOP;
+            }
+            return Clutter.EVENT_PROPAGATE;
+        });
+
+        global.stage.set_key_focus(entry.clutter_text);
+        entry.clutter_text.set_selection(0, -1);
     }
 
     get metaWindow() {
@@ -491,7 +676,7 @@ class GroupSection extends St.BoxLayout {
     }
 
     addWindow(win, focused) {
-        const row = new WindowRow(win);
+        const row = new WindowRow(win, this._sidebar);
         row.setFocused(focused);
         this._rows.push(row);
         this._rowBox.add_child(row);
@@ -527,10 +712,14 @@ class GroupSection extends St.BoxLayout {
  * ---------------------------------------------------------------------- */
 
 class Sidebar {
-    constructor(model, arranger, settings) {
+    constructor(model, arranger, settings, tags) {
         this._model = model;
         this._arranger = arranger;
         this._settings = settings;
+        this.tags = tags;
+        // Assign a window at most once, so dragging it elsewhere by hand is
+        // not undone the next time anything triggers a rebuild.
+        this._assigned = new WeakSet();
         this._sections = [];
         this._rebuildId = 0;
         this._trackedWindows = new Set();
@@ -599,6 +788,33 @@ class Sidebar {
         this.actor = null;
     }
 
+    /** Move a window into the group named after its first tag, creating that
+     *  group if it does not exist yet. `force` re-runs it after a manual
+     *  tag edit. */
+    autoAssign(win, force = false) {
+        if (!this._settings.get_boolean('auto-group'))
+            return;
+        if (!force && this._assigned.has(win))
+            return;
+        if (!isManagedWindow(win))
+            return;
+
+        const tag = this.tags.primaryTag(win);
+        if (!tag)
+            return;
+
+        const index = this._model.ensureGroupNamed(tag, MAX_AUTO_GROUPS);
+        if (index === -1) {
+            log(`window-groups: not creating a group for "${tag}", ` +
+                `already at ${MAX_AUTO_GROUPS} groups`);
+            return;
+        }
+
+        this._assigned.add(win);
+        this._model.moveWindowToGroup(win, index);
+        this.queueRebuild();
+    }
+
     updateGeometry() {
         const monitor = Main.layoutManager.primaryMonitor;
         if (!monitor)
@@ -651,6 +867,7 @@ class Sidebar {
             'workspace-changed', () => this.queueRebuild(),
             'unmanaged', () => {
                 this._trackedWindows.delete(win);
+                this.tags?.forget(win);
                 this.queueRebuild();
             },
             this);
@@ -674,12 +891,29 @@ export default class WindowGroupsExtension extends Extension {
 
         this._model = new GroupModel(this._settings);
         this._arranger = new Arranger(this._model);
-        this._sidebar = new Sidebar(this._model, this._arranger, this._settings);
+        this._tags = new TagEngine(this._settings);
+        this._sidebar = new Sidebar(
+            this._model, this._arranger, this._settings, this._tags);
 
         global.display.connectObject(
             'window-created', (display, win) => {
-                if (isManagedWindow(win))
-                    this._sidebar.queueRebuild();
+                if (!isManagedWindow(win))
+                    return;
+                // wm_class and title are frequently unset at window-created;
+                // first-frame is the earliest point they are reliable.
+                const actor = win.get_compositor_private();
+                if (actor) {
+                    const id = actor.connect('first-frame', () => {
+                        actor.disconnect(id);
+                        this._sidebar?.autoAssign(win);
+                    });
+                } else {
+                    GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                        this._sidebar?.autoAssign(win);
+                        return GLib.SOURCE_REMOVE;
+                    });
+                }
+                this._sidebar.queueRebuild();
             },
             'notify::focus-window', () => this._sidebar.queueRebuild(),
             'grab-op-end', (display, win, op) => {
@@ -717,6 +951,8 @@ export default class WindowGroupsExtension extends Extension {
             // unrelated event happened to trigger a rebuild.
             'changed::arrangements', () => this._sidebar.queueRebuild(),
             'changed::colors', () => this._sidebar.queueRebuild(),
+            'changed::tag-rules', () => this._sidebar.queueRebuild(),
+            'changed::auto-group', () => this._sidebar.queueRebuild(),
             this);
     }
 
@@ -732,6 +968,8 @@ export default class WindowGroupsExtension extends Extension {
         this._model?.destroy();
         this._model = null;
         this._arranger = null;
+        this._tags?.destroy();
+        this._tags = null;
 
         if (this._hadDynamicWorkspaces)
             this._mutterSettings?.set_boolean('dynamic-workspaces', true);
