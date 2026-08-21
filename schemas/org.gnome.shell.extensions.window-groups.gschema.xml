@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.window-groups"
+          path="/org/gnome/shell/extensions/window-groups/">
+    <key name="sidebar-width" type="i">
+      <default>270</default>
+      <summary>Sidebar width in logical pixels</summary>
+    </key>
+    <key name="arrangements" type="as">
+      <default>[]</default>
+      <summary>Per-group arrangement, parallel to workspace index: "free" or "tabbed"</summary>
+    </key>
+    <key name="collapsed" type="as">
+      <default>[]</default>
+      <summary>Per-group collapsed flag, parallel to workspace index: "0" or "1"</summary>
+    </key>
+  </schema>
+</schemalist>

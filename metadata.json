@@ -1,0 +1,8 @@
+{
+  "uuid": "window-groups@tom.devel",
+  "name": "Window Groups",
+  "description": "A left sidebar listing open windows in named, reorderable groups. Each group has its own arrangement (free or tabbed). Groups are backed by static workspaces, so Mutter does the hiding and XWayland works unchanged.",
+  "shell-version": ["48", "49", "50", "51"],
+  "settings-schema": "org.gnome.shell.extensions.window-groups",
+  "version": 1
+}
