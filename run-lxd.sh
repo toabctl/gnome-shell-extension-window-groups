@@ -15,6 +15,7 @@
 #     ./run-lxd.sh sync        re-push the extension and restart the shell
 #     ./run-lxd.sh console     open the interactive desktop (needs virt-viewer)
 #     ./run-lxd.sh shot F.png  grab a screenshot from inside the guest
+#     ./run-lxd.sh res 2.0     re-pin the guest resolution if it goes tiny
 #     ./run-lxd.sh log         tail the guest shell journal
 #     ./run-lxd.sh down        stop the VM
 #     ./run-lxd.sh destroy     delete the VM
@@ -129,9 +130,32 @@ cmd_sync() {
     as_user gnome-extensions info "$UUID" | grep -i state || true
 }
 
+# Pin the guest's mode and scale. Without this the desktop is unreadable:
+# the SPICE agent resizes the VM to whatever the client window is, which
+# lands on a huge mode at scale 1.0 and shrinks every UI element.
+cmd_res() {
+    local scale="${1:-2.0}" mode="${2:-3840x2160}"
+    as_user python3 \
+        "/home/$(guest_user)/.local/share/gnome-shell/extensions/$UUID/guest-display.py" \
+        "$scale" "$mode"
+}
+
 cmd_console() {
     command -v remote-viewer >/dev/null \
         || die "remote-viewer missing. Install with:  sudo apt install virt-viewer"
+
+    if [ -z "${WG_KEEP_VDAGENT:-}" ]; then
+        # spice-vdagent is what re-resizes the guest on every client resize,
+        # undoing the pin below. Stopping it costs host/guest clipboard
+        # sharing, which this test VM does not need.
+        lxc exec "$VM" -- systemctl stop spice-vdagentd.socket 2>/dev/null || true
+        lxc exec "$VM" -- systemctl stop spice-vdagentd 2>/dev/null || true
+        echo "stopped spice-vdagentd so the resolution stays put"
+        echo "  (clipboard sharing is off; WG_KEEP_VDAGENT=1 to keep it)"
+    fi
+    cmd_res "${WG_SCALE:-2.0}" "${WG_MODE:-3840x2160}"
+
+    echo "opening console — close the window to return here"
     lxc console "$VM" --type=vga
 }
 
@@ -167,6 +191,7 @@ case "${1:-up}" in
     sync)    cmd_sync ;;
     console) cmd_console ;;
     shot)    shift; cmd_shot "${1:-}" ;;
+    res)     shift; cmd_res "${1:-2.0}" "${2:-3840x2160}" ;;
     log)     cmd_log ;;
     down)    lxc stop "$VM" ;;
     destroy) lxc delete --force "$VM" ;;
