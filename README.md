@@ -73,8 +73,7 @@ this setting re-creates the sidebar rather than just moving it.
 - Click a group name → switch to that group.
 - **Right-click** a group name → rename inline.
 - Drag a window row onto another group → move the window there.
-- Header buttons: collapse, cycle arrangement, move group up, move group
-  down, remove group.
+- Drag a group header onto another group to reorder groups.
 - `+ New group` at the bottom.
 
 The extension sets `org.gnome.mutter dynamic-workspaces` to `false` while

@@ -213,14 +213,16 @@ class GroupModel {
             this.workspace(index), global.get_current_time());
     }
 
-    moveGroup(index, delta) {
-        const to = index + delta;
-        if (to < 0 || to >= this.count)
+    /** Move a group to an arbitrary position. reorder_workspace() has move
+     *  semantics — it lifts the workspace out and reinserts it, shifting the
+     *  rest — so the parallel arrays must splice rather than swap, or they
+     *  desynchronise for any move longer than one step. */
+    moveGroupTo(from, to) {
+        if (from === to || from < 0 || to < 0 ||
+            from >= this.count || to >= this.count)
             return;
-        // reorder_workspace() moves the workspace but does not know about
-        // names or arrangements, so we keep both parallel arrays in step.
-        this._swapParallel(index, to);
-        global.workspace_manager.reorder_workspace(this.workspace(index), to);
+        this._moveParallel(from, to);
+        global.workspace_manager.reorder_workspace(this.workspace(from), to);
     }
 
     moveWindowToGroup(win, index) {
@@ -235,17 +237,18 @@ class GroupModel {
         return out;
     }
 
-    _swapParallel(a, b) {
-        const swap = (getter, setter, fill) => {
+    _moveParallel(from, to) {
+        const move = (getter, setter, fill) => {
             const values = this._padded(getter(), fill);
-            [values[a], values[b]] = [values[b], values[a]];
+            const [item] = values.splice(from, 1);
+            values.splice(to, 0, item);
             setter(values);
         };
-        swap(() => this._wmPrefs.get_strv('workspace-names'),
+        move(() => this._wmPrefs.get_strv('workspace-names'),
             v => this._wmPrefs.set_strv('workspace-names', v), '');
-        swap(() => this._settings.get_strv('arrangements'),
+        move(() => this._settings.get_strv('arrangements'),
             v => this._settings.set_strv('arrangements', v), 'free');
-        swap(() => this._settings.get_strv('colors'),
+        move(() => this._settings.get_strv('colors'),
             v => this._settings.set_strv('colors', v), 'none');
     }
 
@@ -622,25 +625,37 @@ class GroupSection extends St.BoxLayout {
         });
         header.add_child(this._arrangeButton);
 
-        const up = iconButton('go-up-symbolic',
-            'Move this whole group up in the sidebar');
-        up.connect('clicked', () => this._model.moveGroup(this._index, -1));
-        up.reactive = this._index > 0;
-        header.add_child(up);
-
-        const down = iconButton('go-down-symbolic',
-            'Move this whole group down in the sidebar');
-        down.connect('clicked', () => this._model.moveGroup(this._index, 1));
-        down.reactive = this._index < this._model.count - 1;
-        header.add_child(down);
-
         const remove = iconButton('window-close-symbolic',
             'Delete this group (its windows move to the group above)');
         remove.connect('clicked', () => this._model.removeGroup(this._index));
         remove.reactive = this._model.count > 1;
         header.add_child(remove);
 
+        // Drag the header to reorder groups. The delegate is the section so
+        // a drop target receives something it can identify; the header has no
+        // handleDragOver of its own, so the target walk passes through it.
+        header._delegate = this;
+        header.reactive = true;
+        this._headerDraggable = DND.makeDraggable(header, {dragActorOpacity: 200});
+        this._headerDraggable.connect('drag-begin',
+            () => this.add_style_class_name('wg-dragging'));
+        this._headerDraggable.connect('drag-end',
+            () => this.remove_style_class_name('wg-dragging'));
+        this._headerDraggable.connect('drag-cancelled',
+            () => this.remove_style_class_name('wg-dragging'));
+
         this._header = header;
+    }
+
+    getDragActor() {
+        return new St.Label({
+            text: this._model.name(this._index),
+            style_class: 'wg-drag-label',
+        });
+    }
+
+    getDragActorSource() {
+        return this._header;
     }
 
     _beginRename() {
@@ -688,20 +703,31 @@ class GroupSection extends St.BoxLayout {
             this.remove_style_class_name('wg-drop-target');
     }
 
-    /* DND drop target — accepts a WindowRow dragged from any group. */
+    /* DND drop target — a WindowRow moves that window here; another group's
+     * header reorders that group to this position. */
     handleDragOver(source) {
-        if (!(source instanceof WindowRow))
-            return DND.DragMotionResult.CONTINUE;
-        this.setDropHighlight(true);
-        return DND.DragMotionResult.MOVE_DROP;
+        if (source instanceof WindowRow) {
+            this.setDropHighlight(true);
+            return DND.DragMotionResult.MOVE_DROP;
+        }
+        if (source instanceof GroupSection && source !== this) {
+            this.setDropHighlight(true);
+            return DND.DragMotionResult.MOVE_DROP;
+        }
+        return DND.DragMotionResult.CONTINUE;
     }
 
     acceptDrop(source) {
         this.setDropHighlight(false);
-        if (!(source instanceof WindowRow))
-            return false;
-        this._model.moveWindowToGroup(source.metaWindow, this._index);
-        return true;
+        if (source instanceof WindowRow) {
+            this._model.moveWindowToGroup(source.metaWindow, this._index);
+            return true;
+        }
+        if (source instanceof GroupSection && source !== this) {
+            this._model.moveGroupTo(source.groupIndex, this._index);
+            return true;
+        }
+        return false;
     }
 });
 
