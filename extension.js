@@ -666,6 +666,12 @@ export default class WindowGroupsExtension extends Extension {
 
         this._settings.connectObject(
             'changed::sidebar-width', () => this._sidebar.updateGeometry(),
+            // The header buttons call queueRebuild() themselves, but a write
+            // from outside (gsettings, a prefs dialog, a second monitor of
+            // the same key) would otherwise not be picked up until some
+            // unrelated event happened to trigger a rebuild.
+            'changed::arrangements', () => this._sidebar.queueRebuild(),
+            'changed::collapsed', () => this._sidebar.queueRebuild(),
             this);
     }
 

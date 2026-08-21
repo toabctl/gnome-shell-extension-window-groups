@@ -63,6 +63,31 @@ its own session bus.
 
 `./spawn-test-apps.sh` opens a few windows in the nested session.
 
+### Full-session testing in an LXD VM
+
+`./run-lxd.sh` drives an `images:ubuntu/26.04/desktop` VM — same GNOME 50.x as
+a 26.04 host, so extension API parity holds. A VM has its own kernel, so
+unlike the nested harness there is no shared runtime dir, dconf or X socket to
+reason about at all.
+
+    sudo lxd init --auto --storage-backend=dir   # once
+    ./run-lxd.sh up          # launch, push the extension, enable it
+    ./run-lxd.sh console     # interactive desktop (needs virt-viewer)
+    ./run-lxd.sh sync        # re-push and reload after an edit
+    ./run-lxd.sh shot f.png  # screenshot from inside the guest
+    ./run-lxd.sh log         # tail the guest journal
+
+Three bugs showed up here that the nested harness could not surface: the
+Ubuntu dock overdrawing the sidebar, labels inheriting a dark theme
+foreground under the default light theme, and external `arrangements` writes
+not triggering a rebuild.
+
+If `lxd init` created `lxdbr0` on a host that also runs Docker, guest egress
+will fail — Docker sets the `FORWARD` policy to DROP. The guest still gets a
+DHCP lease and reaches its gateway, which is the tell. Fix with
+`sudo iptables -I DOCKER-USER -i lxdbr0 -j ACCEPT` and the matching `-o` rule.
+Nothing in this harness needs guest networking, so it is optional.
+
 ### Blast radius
 
 What is isolated, and why it needed to be:
