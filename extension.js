@@ -39,6 +39,24 @@ const ARRANGEMENT_LABEL = {
     tabbed: 'Tabbed',
 };
 
+/** Group colours, modelled on Chrome's tab groups. 'none' comes first so
+ *  cycling always has a way back to an unstyled group. */
+const GROUP_COLORS = [
+    {name: 'none',   hex: null},
+    {name: 'blue',   hex: '#4285f4'},
+    {name: 'red',    hex: '#ea4335'},
+    {name: 'yellow', hex: '#fbbc04'},
+    {name: 'green',  hex: '#34a853'},
+    {name: 'pink',   hex: '#ff8bcb'},
+    {name: 'purple', hex: '#a142f4'},
+    {name: 'cyan',   hex: '#24c1e0'},
+    {name: 'orange', hex: '#fa903e'},
+];
+
+function colorByName(name) {
+    return GROUP_COLORS.find(c => c.name === name) ?? GROUP_COLORS[0];
+}
+
 /** Windows we put in the sidebar and arrange. Dialogs follow their parent,
  *  docks and panels are not the user's windows. */
 function isManagedWindow(win) {
@@ -57,6 +75,10 @@ class GroupModel {
         this._wmPrefs = new Gio.Settings({
             schema_id: 'org.gnome.desktop.wm.preferences',
         });
+    }
+
+    get wmPrefs() {
+        return this._wmPrefs;
     }
 
     destroy() {
@@ -102,6 +124,23 @@ class GroupModel {
         const next = (ARRANGEMENTS.indexOf(this.arrangement(index)) + 1) % ARRANGEMENTS.length;
         this.setArrangement(index, ARRANGEMENTS[next]);
         return ARRANGEMENTS[next];
+    }
+
+    color(index) {
+        return colorByName(this._settings.get_strv('colors')[index]);
+    }
+
+    setColor(index, name) {
+        const values = this._padded(this._settings.get_strv('colors'), 'none');
+        values[index] = name;
+        this._settings.set_strv('colors', values);
+    }
+
+    cycleColor(index) {
+        const current = GROUP_COLORS.indexOf(this.color(index));
+        const next = GROUP_COLORS[(current + 1) % GROUP_COLORS.length];
+        this.setColor(index, next.name);
+        return next;
     }
 
     isCollapsed(index) {
@@ -174,6 +213,8 @@ class GroupModel {
             v => this._settings.set_strv('arrangements', v), 'free');
         swap(() => this._settings.get_strv('collapsed'),
             v => this._settings.set_strv('collapsed', v), '0');
+        swap(() => this._settings.get_strv('colors'),
+            v => this._settings.set_strv('colors', v), 'none');
     }
 
     _spliceParallel(index) {
@@ -188,6 +229,8 @@ class GroupModel {
             v => this._settings.set_strv('arrangements', v), 'free');
         splice(() => this._settings.get_strv('collapsed'),
             v => this._settings.set_strv('collapsed', v), '0');
+        splice(() => this._settings.get_strv('colors'),
+            v => this._settings.set_strv('colors', v), 'none');
     }
 }
 
@@ -345,6 +388,12 @@ class GroupSection extends St.BoxLayout {
         if (index === model.activeIndex)
             this.add_style_class_name('wg-group-active');
 
+        const color = model.color(index);
+        if (color.hex) {
+            this.style = `border-left: 3px solid ${color.hex};`;
+            this._nameButton.get_child().style = `color: ${color.hex};`;
+        }
+
         this._collapsed = model.isCollapsed(index);
         this._rowBox.visible = !this._collapsed;
     }
@@ -366,6 +415,22 @@ class GroupSection extends St.BoxLayout {
             'Collapse or expand group');
         this._expander.connect('clicked', () => this._toggleCollapsed());
         header.add_child(this._expander);
+
+        const color = this._model.color(this._index);
+        this._colorDot = new St.Button({
+            style_class: 'wg-color-dot',
+            can_focus: true,
+            accessible_name: `Group colour: ${color.name} (click to change)`,
+            child: new St.Widget({style_class: 'wg-color-dot-swatch'}),
+        });
+        this._colorDot.get_child().style = color.hex
+            ? `background-color: ${color.hex};`
+            : 'background-color: transparent; border: 1px solid rgba(255,255,255,0.45);';
+        this._colorDot.connect('clicked', () => {
+            this._model.cycleColor(this._index);
+            this._sidebar.queueRebuild();
+        });
+        header.add_child(this._colorDot);
 
         this._nameButton = new St.Button({
             style_class: 'wg-group-name-button',
@@ -657,6 +722,13 @@ export default class WindowGroupsExtension extends Extension {
             'workspace-switched', () => this._sidebar.queueRebuild(),
             this);
 
+        // Renaming from the sidebar calls queueRebuild() itself, but the name
+        // also lives in a shared GNOME key that Settings (or the user) can
+        // change from outside.
+        this._model.wmPrefs.connectObject(
+            'changed::workspace-names', () => this._sidebar.queueRebuild(),
+            this);
+
         Main.layoutManager.connectObject(
             'monitors-changed', () => {
                 this._sidebar.updateGeometry();
@@ -672,6 +744,7 @@ export default class WindowGroupsExtension extends Extension {
             // unrelated event happened to trigger a rebuild.
             'changed::arrangements', () => this._sidebar.queueRebuild(),
             'changed::collapsed', () => this._sidebar.queueRebuild(),
+            'changed::colors', () => this._sidebar.queueRebuild(),
             this);
     }
 
@@ -679,6 +752,7 @@ export default class WindowGroupsExtension extends Extension {
         global.display.disconnectObject(this);
         global.workspace_manager.disconnectObject(this);
         Main.layoutManager.disconnectObject(this);
+        this._model?.wmPrefs?.disconnectObject(this);
         this._settings?.disconnectObject(this);
 
         this._sidebar?.destroy();

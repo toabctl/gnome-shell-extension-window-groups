@@ -119,3 +119,22 @@
 .wg-new-group:hover {
     background-color: rgba(255, 255, 255, 0.16);
 }
+
+.wg-color-dot {
+    padding: 3px;
+    border-radius: 999px;
+}
+
+.wg-color-dot:hover {
+    background-color: rgba(255, 255, 255, 0.15);
+}
+
+.wg-color-dot-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+}
+
+.wg-group {
+    border-left: 3px solid transparent;
+}

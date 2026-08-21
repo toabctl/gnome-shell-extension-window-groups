@@ -109,11 +109,17 @@ cmd_up() {
 cmd_sync() {
     require_lxd
     push_extension
-    # Wayland has no shell restart, so bounce the extension instead.
-    as_user gnome-extensions disable "$UUID" || true
-    sleep 1
+    # Disabling and re-enabling is NOT enough: GJS caches the ES module, so
+    # extension.js is only imported once per shell lifetime. Wayland has no
+    # shell restart either, so the session itself has to go. Cheap in a VM.
+    echo "restarting the guest session (module cache forces this)"
+    lxc exec "$VM" -- systemctl restart gdm
+    sleep 5
+    wait_for_session
+    # Autologin re-enables it, but make sure.
     as_user gnome-extensions enable "$UUID" || true
-    echo "reloaded; check ./run-lxd.sh log for JS errors"
+    sleep 3
+    as_user gnome-extensions info "$UUID" | grep -i state || true
 }
 
 cmd_console() {
