@@ -63,6 +63,31 @@ its own session bus.
 
 `./spawn-test-apps.sh` opens a few windows in the nested session.
 
+### Blast radius
+
+What is isolated, and why it needed to be:
+
+| Shared resource | Hazard | Isolation |
+| --- | --- | --- |
+| dconf | extension writes `dynamic-workspaces=false` and `workspace-names` | `XDG_CONFIG_HOME` -> sandbox DB |
+| session bus | name grabs, service activation | `dbus-run-session` |
+| `$XDG_RUNTIME_DIR/gnome-shell-disable-extensions` | `org.gnome.Shell@.service` has `OnFailure=org.gnome.Shell-disable-extensions.service`, whose `ConditionPathExists` is this file. A nested shell that dies leaves it armed, so the *next* crash of your real shell sets `disable-user-extensions true` | private `XDG_RUNTIME_DIR` |
+| `$XDG_RUNTIME_DIR/gvfs` | live FUSE mount owned by `run-user-1000-gvfs.mount`; the sandbox gvfsd tries to mount over it | private `XDG_RUNTIME_DIR` |
+| `$XDG_RUNTIME_DIR/keyring` | sandbox apps otherwise talk to your running `gnome-keyring-daemon` | private `XDG_RUNTIME_DIR` |
+| `/tmp/.X11-unix`, `/tmp/.Xn-lock` | cannot be redirected | snapshot before, reap only displays we created, after their pid exits |
+
+`--devkit` opens `/dev/dri/renderD128` as a render node "using no mode
+setting" and never calls logind `TakeControl` — that is exactly what fails
+with `EBUSY` if you try `--display-server`. It structurally cannot acquire
+DRM master or take over your console.
+
+The remaining risk is not the harness — it is enabling this extension in
+your live session. On Wayland gnome-shell *is* the display server, so a shell
+crash takes every application with it. GNOME catches exceptions thrown from
+extension callbacks (a `TypeError` here only logged `JS ERROR` and the shell
+kept running), but a bad Clutter allocation or a malformed strut can still
+wedge the UI. Test in the harness.
+
 Notes:
 
 - GNOME 50 removed `gnome-shell --nested`; `--devkit` is the replacement.

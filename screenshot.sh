@@ -4,6 +4,7 @@
 # screen, so this is safe to run while you are working.
 #
 # Usage: ./screenshot.sh [output.png]
+#   WG_ARRANGEMENTS="['tabbed','free']"  preset per-group arrangements
 set -euo pipefail
 
 UUID="window-groups@tom.devel"
@@ -13,21 +14,20 @@ OUT="$(realpath -m "${1:-$SRC/shot.png}")"
 RES="${WG_RESOLUTION:-1600x1000}"
 NESTED_DISPLAY="wg-shot"
 
+# shellcheck source=lib-sandbox.sh
+source "$SRC/lib-sandbox.sh"
+
 rm -rf "$SANDBOX"
-mkdir -p "$SANDBOX/config" "$SANDBOX/cache" "$SANDBOX/share/gnome-shell/extensions"
+wg_sandbox_env "$SANDBOX"
+wg_snapshot_x
+trap 'wg_reap_x' EXIT
+
+# Headless needs no host compositor at all.
+unset WAYLAND_DISPLAY DISPLAY
+
 ln -sfn "$SRC" "$SANDBOX/share/gnome-shell/extensions/$UUID"
 glib-compile-schemas "$SRC/schemas"
 
-# Headless needs no host compositor, so give it a private runtime dir too.
-# That keeps the nested shell away from the host's
-# $XDG_RUNTIME_DIR/gnome-shell-disable-extensions crash guard.
-mkdir -p "$SANDBOX/runtime"
-chmod 700 "$SANDBOX/runtime"
-export XDG_RUNTIME_DIR="$SANDBOX/runtime"
-export XDG_DATA_HOME="$SANDBOX/share"
-export XDG_CONFIG_HOME="$SANDBOX/config"
-export XDG_CACHE_HOME="$SANDBOX/cache"
-export XDG_STATE_HOME="$SANDBOX/state"
 export UUID OUT RES NESTED_DISPLAY SANDBOX SRC
 export WG_ARRANGEMENTS="${WG_ARRANGEMENTS:-}"
 
@@ -44,7 +44,7 @@ dbus-run-session -- bash -euo pipefail -c '
     gnome-shell --headless --virtual-monitor "$RES" \
         --wayland-display="$NESTED_DISPLAY" >"$SANDBOX/shell.log" 2>&1 &
     SHELL_PID=$!
-    trap "kill $SHELL_PID 2>/dev/null || true" EXIT
+    trap "kill $SHELL_PID 2>/dev/null; wait $SHELL_PID 2>/dev/null; true" EXIT
 
     for _ in $(seq 1 40); do
         gdbus introspect --session --dest org.gnome.Shell \
@@ -53,7 +53,6 @@ dbus-run-session -- bash -euo pipefail -c '
     done
 
     export WAYLAND_DISPLAY="$NESTED_DISPLAY"
-    unset DISPLAY
     for app in gnome-text-editor gnome-calculator; do
         command -v "$app" >/dev/null && setsid "$app" >/dev/null 2>&1 &
     done

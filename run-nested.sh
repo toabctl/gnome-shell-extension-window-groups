@@ -1,43 +1,37 @@
 #!/usr/bin/env bash
-# Run this extension in a nested GNOME Shell, fully isolated from the
-# running session.
-#
-# Isolation that matters here: the extension writes to
-# org.gnome.mutter dynamic-workspaces and
-# org.gnome.desktop.wm.preferences workspace-names. Pointing XDG_CONFIG_HOME
-# at a sandbox gives dconf its own user database, so those writes cannot
-# reach your real session. dbus-run-session gives it its own session bus.
+# Run this extension in a nested GNOME Shell, isolated from the running
+# session. See lib-sandbox.sh for what is isolated and why.
 set -euo pipefail
 
 UUID="window-groups@tom.devel"
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SANDBOX="${WG_SANDBOX:-$SRC/.sandbox}"
 DISPLAY_NAME="${WG_WAYLAND_DISPLAY:-wg-test}"
-RES="${WG_RESOLUTION:-1600x1000}"
+
+# shellcheck source=lib-sandbox.sh
+source "$SRC/lib-sandbox.sh"
 
 rm -rf "$SANDBOX"
-mkdir -p "$SANDBOX/config" "$SANDBOX/cache" "$SANDBOX/runtime" \
-         "$SANDBOX/share/gnome-shell/extensions"
-chmod 700 "$SANDBOX/runtime"
+wg_sandbox_env "$SANDBOX"
+wg_snapshot_x
+trap 'wg_reap_x' EXIT
 
 ln -sfn "$SRC" "$SANDBOX/share/gnome-shell/extensions/$UUID"
 glib-compile-schemas "$SRC/schemas"
 
-export XDG_DATA_HOME="$SANDBOX/share"
-export XDG_CONFIG_HOME="$SANDBOX/config"
-export XDG_CACHE_HOME="$SANDBOX/cache"
-export XDG_STATE_HOME="$SANDBOX/state"
-
-# Pre-enable the extension in the sandbox's dconf database.
+# Pre-enable the extension in the sandbox's own dconf database.
 dbus-run-session -- gsettings set org.gnome.shell enabled-extensions "['$UUID']"
 dbus-run-session -- gsettings set org.gnome.shell disable-user-extensions false
 dbus-run-session -- gsettings set org.gnome.desktop.interface color-scheme "'prefer-dark'"
 
-echo "Nested shell: WAYLAND_DISPLAY=$DISPLAY_NAME  sandbox=$SANDBOX"
-echo "Launch test apps with:  ./spawn-test-apps.sh"
+echo "sandbox        : $SANDBOX"
+echo "runtime dir    : $XDG_RUNTIME_DIR"
+echo "host compositor: $WAYLAND_DISPLAY"
+echo "nested socket  : $DISPLAY_NAME"
+echo "test apps      : ./spawn-test-apps.sh"
 
-# GNOME 50 dropped --nested; --devkit is the replacement and is what puts
-# the shell in a window on the host. Keep the host WAYLAND_DISPLAY so it has
-# somewhere to draw; --wayland-display names the *nested* socket.
-exec dbus-run-session -- \
-    gnome-shell --devkit --wayland --wayland-display="$DISPLAY_NAME"
+# GNOME 50 removed --nested; --devkit is the replacement. It opens a render
+# node with no mode setting and never calls logind TakeControl, so it cannot
+# acquire DRM master or take over your console.
+dbus-run-session -- \
+    gnome-shell --devkit --wayland --wayland-display="$DISPLAY_NAME" || true
