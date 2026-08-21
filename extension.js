@@ -19,9 +19,14 @@ import St from 'gi://St';
 
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as DND from 'resource:///org/gnome/shell/ui/dnd.js';
+import * as Layout from 'resource:///org/gnome/shell/ui/layout.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 const ICON_SIZE = 18;
+const REVEAL_TIMEOUT = 1000;
+const SLIDE_DURATION = 200;
+const HIDE_DELAY = 400;
+const TOOLTIP_DELAY = 450;
 const BUTTON_ICON_SIZE = 14;
 
 /** Arrangements a group can use. Deliberately only two for now: the
@@ -344,13 +349,50 @@ class Arranger {
  * Widgets
  * ---------------------------------------------------------------------- */
 
-function iconButton(iconName, accessibleName, styleClass = 'wg-icon-button') {
-    return new St.Button({
+/** Hover tooltip. The header is a row of small symbolic icons whose meaning
+ *  is not guessable; an accessible_name alone does not help a sighted user. */
+function addTooltip(button, text) {
+    let label = null;
+    let timeoutId = 0;
+
+    const hide = () => {
+        if (timeoutId) {
+            GLib.source_remove(timeoutId);
+            timeoutId = 0;
+        }
+        label?.destroy();
+        label = null;
+    };
+
+    button.connect('notify::hover', () => {
+        if (!button.hover) {
+            hide();
+            return;
+        }
+        timeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, TOOLTIP_DELAY, () => {
+            timeoutId = 0;
+            label = new St.Label({style_class: 'wg-tooltip', text});
+            Main.layoutManager.addTopChrome(label);
+            const [x, y] = button.get_transformed_position();
+            label.set_position(
+                Math.round(x + button.width + 8),
+                Math.round(y + (button.height - label.height) / 2));
+            return GLib.SOURCE_REMOVE;
+        });
+    });
+    button.connect('destroy', hide);
+}
+
+function iconButton(iconName, tooltip, styleClass = 'wg-icon-button') {
+    const button = new St.Button({
         style_class: styleClass,
         can_focus: true,
-        accessible_name: accessibleName,
+        track_hover: true,
+        accessible_name: tooltip,
         child: new St.Icon({icon_name: iconName, icon_size: BUTTON_ICON_SIZE}),
     });
+    addTooltip(button, tooltip);
+    return button;
 }
 
 const WindowRow = GObject.registerClass(
@@ -531,7 +573,8 @@ class GroupSection extends St.BoxLayout {
         this._colorDot = new St.Button({
             style_class: 'wg-color-dot',
             can_focus: true,
-            accessible_name: `Group colour: ${color.name} (click to change)`,
+            track_hover: true,
+            accessible_name: `Group colour: ${color.name} — click to change`,
             child: new St.Widget({style_class: 'wg-color-dot-swatch'}),
         });
         this._colorDot.get_child().style = color.hex
@@ -541,6 +584,7 @@ class GroupSection extends St.BoxLayout {
             this._model.cycleColor(this._index);
             this._sidebar.queueRebuild();
         });
+        addTooltip(this._colorDot, `Group colour: ${color.name} — click to change`);
         header.add_child(this._colorDot);
 
         this._nameButton = new St.Button({
@@ -566,26 +610,32 @@ class GroupSection extends St.BoxLayout {
         header.add_child(this._nameButton);
 
         const arrangement = this._model.arrangement(this._index);
+        const nextArrangement = ARRANGEMENTS[
+            (ARRANGEMENTS.indexOf(arrangement) + 1) % ARRANGEMENTS.length];
         this._arrangeButton = iconButton(
             ARRANGEMENT_ICON[arrangement],
-            `Arrangement: ${ARRANGEMENT_LABEL[arrangement]} (click to change)`);
+            `How this group's windows are arranged: ${ARRANGEMENT_LABEL[arrangement]}` +
+            ` — click for ${ARRANGEMENT_LABEL[nextArrangement]}`);
         this._arrangeButton.connect('clicked', () => {
             this._model.cycleArrangement(this._index);
             this._sidebar.queueRebuild();
         });
         header.add_child(this._arrangeButton);
 
-        const up = iconButton('go-up-symbolic', 'Move group up');
+        const up = iconButton('go-up-symbolic',
+            'Move this whole group up in the sidebar');
         up.connect('clicked', () => this._model.moveGroup(this._index, -1));
         up.reactive = this._index > 0;
         header.add_child(up);
 
-        const down = iconButton('go-down-symbolic', 'Move group down');
+        const down = iconButton('go-down-symbolic',
+            'Move this whole group down in the sidebar');
         down.connect('clicked', () => this._model.moveGroup(this._index, 1));
         down.reactive = this._index < this._model.count - 1;
         header.add_child(down);
 
-        const remove = iconButton('window-close-symbolic', 'Remove group');
+        const remove = iconButton('window-close-symbolic',
+            'Delete this group (its windows move to the group above)');
         remove.connect('clicked', () => this._model.removeGroup(this._index));
         remove.reactive = this._model.count > 1;
         header.add_child(remove);
@@ -699,9 +749,25 @@ class Sidebar {
         newGroup.connect('clicked', () => this._model.addGroup());
         this.actor.add_child(newGroup);
 
+        this._autoHide = this._settings.get_boolean('auto-hide');
+        this._revealed = !this._autoHide;
+        this._hideTimeoutId = 0;
+
+        // A hidden sidebar must not keep reserving space, or hiding it gains
+        // nothing: the windows would stay pushed to the right regardless.
         Main.layoutManager.addChrome(this.actor, {
-            affectsStruts: true,
+            affectsStruts: !this._autoHide,
             trackFullscreen: true,
+        });
+
+        this.actor.connect('enter-event', () => {
+            this._cancelHide();
+            return Clutter.EVENT_PROPAGATE;
+        });
+        this.actor.connect('leave-event', () => {
+            if (this._autoHide)
+                this._queueHide();
+            return Clutter.EVENT_PROPAGATE;
         });
 
         // dragMonitors run before the per-target walk, so this reliably
@@ -716,7 +782,109 @@ class Sidebar {
         DND.addDragMonitor(this._dragMonitor);
 
         this.updateGeometry();
+        this._updateAutoHide();
         this.rebuild();
+    }
+
+    /* ---- auto-hide ---------------------------------------------------- */
+
+    _updateAutoHide() {
+        this._autoHide = this._settings.get_boolean('auto-hide');
+        this._teardownBarrier();
+
+        if (!this._autoHide) {
+            this._cancelHide();
+            this._revealed = true;
+            this.actor.translation_x = 0;
+            return;
+        }
+
+        this._buildBarrier();
+        this._hide(true);
+    }
+
+    _buildBarrier() {
+        const monitor = Main.layoutManager.primaryMonitor;
+        if (!monitor)
+            return;
+        const top = Main.layoutManager.panelBox.height;
+
+        // A pressure barrier rather than a plain reactive strip: the same
+        // mechanism the hot corner uses, so brushing past the edge while
+        // aiming at a window does not fling the sidebar open.
+        this._barrier = new Meta.Barrier({
+            backend: global.backend,
+            x1: monitor.x, x2: monitor.x,
+            y1: monitor.y + top, y2: monitor.y + monitor.height,
+            directions: Meta.BarrierDirection.POSITIVE_X,
+        });
+        this._pressureBarrier = new Layout.PressureBarrier(
+            this._settings.get_int('reveal-pressure'),
+            REVEAL_TIMEOUT,
+            Shell.ActionMode.NORMAL);
+        this._pressureBarrier.addBarrier(this._barrier);
+        this._pressureBarrier.connect('trigger', () => this._reveal());
+    }
+
+    _teardownBarrier() {
+        if (this._pressureBarrier) {
+            if (this._barrier)
+                this._pressureBarrier.removeBarrier(this._barrier);
+            this._pressureBarrier.destroy();
+            this._pressureBarrier = null;
+        }
+        if (this._barrier) {
+            this._barrier.destroy();
+            this._barrier = null;
+        }
+    }
+
+    _reveal() {
+        this._cancelHide();
+        if (this._revealed)
+            return;
+        this._revealed = true;
+        this.actor.remove_all_transitions();
+        this.actor.ease({
+            translation_x: 0,
+            duration: SLIDE_DURATION,
+            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+        });
+    }
+
+    _hide(immediate = false) {
+        this._cancelHide();
+        this._revealed = false;
+        const offscreen = -this.actor.width;
+        this.actor.remove_all_transitions();
+        if (immediate) {
+            this.actor.translation_x = offscreen;
+            return;
+        }
+        this.actor.ease({
+            translation_x: offscreen,
+            duration: SLIDE_DURATION,
+            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+        });
+    }
+
+    _queueHide() {
+        this._cancelHide();
+        this._hideTimeoutId = GLib.timeout_add(
+            GLib.PRIORITY_DEFAULT, HIDE_DELAY, () => {
+                this._hideTimeoutId = 0;
+                // Do not slide out from under a pointer that came back.
+                if (!this.actor.has_pointer)
+                    this._hide();
+                return GLib.SOURCE_REMOVE;
+            });
+    }
+
+    _cancelHide() {
+        if (this._hideTimeoutId) {
+            GLib.source_remove(this._hideTimeoutId);
+            this._hideTimeoutId = 0;
+        }
     }
 
     destroy() {
@@ -724,6 +892,8 @@ class Sidebar {
             GLib.source_remove(this._rebuildId);
             this._rebuildId = 0;
         }
+        this._cancelHide();
+        this._teardownBarrier();
         DND.removeDragMonitor(this._dragMonitor);
         for (const win of this._trackedWindows)
             win.disconnectObject(this);
@@ -770,6 +940,8 @@ class Sidebar {
         // Meta.Side.LEFT strut, so the work area shrinks for real.
         this.actor.set_position(monitor.x, monitor.y + top);
         this.actor.set_size(width, monitor.height - top);
+        if (this._autoHide && !this._revealed)
+            this.actor.translation_x = -width;
     }
 
     queueRebuild() {
@@ -882,7 +1054,17 @@ export default class WindowGroupsExtension extends Extension {
             'changed::arrangements', () => this._sidebar.queueRebuild(),
             'changed::colors', () => this._sidebar.queueRebuild(),
             'changed::auto-group', () => this._sidebar.queueRebuild(),
+            // Struts are fixed at addChrome() time, so flipping auto-hide
+            // has to re-register the actor, not just move it.
+            'changed::auto-hide', () => this._reloadSidebar(),
+            'changed::reveal-pressure', () => this._reloadSidebar(),
             this);
+    }
+
+    _reloadSidebar() {
+        this._sidebar?.destroy();
+        this._sidebar = new Sidebar(
+            this._model, this._arranger, this._settings, this._tags);
     }
 
     disable() {

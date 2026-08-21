@@ -52,6 +52,21 @@ identity — `get_id()` and `get_stable_sequence()` are session-scoped — so a
 tag attached to one particular window cannot be reattached after a restart.
 Tags render with a dashed outline to make that visible rather than silent.
 
+## Auto-hide
+
+    gsettings set org.gnome.shell.extensions.window-groups auto-hide true
+
+The sidebar slides off screen and reveals when you push the pointer into the
+left edge. Reveal uses a `Meta.Barrier` driven by `Layout.PressureBarrier` —
+the same mechanism as the hot corner — so brushing past the edge on the way
+to a window does not fling it open. Tune the shove needed with
+`reveal-pressure` (pixels, default 100). It hides again shortly after the
+pointer leaves.
+
+With auto-hide on the sidebar no longer reserves screen space; windows use
+the full width. Struts are fixed when the actor is registered, so toggling
+this setting re-creates the sidebar rather than just moving it.
+
 ## Usage
 
 - Click a window row → focus that window (switching group if needed).
