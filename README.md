@@ -193,3 +193,25 @@ Notes:
 - Reordering windows *within* a group.
 - The Activities overview shows groups as workspaces — a second UI for the
   same thing, which this extension does not control.
+
+## Layout engine
+
+`layouts.js` holds the geometry and imports nothing from GNOME. Everything is
+`(kind, count, area, state) -> rects`, so it is testable with plain node:
+
+    node --test layouts.test.mjs
+
+Layouts: `free` (returns null — do not touch the windows), `tabbed`,
+`columns`, `rows`, `grid`, `master-stack`. `resizeToState()` turns a user's
+drag-resize into new layout state, so resizing a tiled window edits the
+layout instead of being snapped back.
+
+Boundaries are accumulated as exact fractions and rounded once each, so slice
+*i+1* starts exactly where slice *i* ended. Rounding each width independently
+leaks a pixel per slice and leaves visible seams — there is a test for it.
+
+The suite is mutation-checked: deliberately reintroducing the seam bug,
+dropping the outer gap, or breaking the grid shape all make it fail. That
+matters because a green suite proves nothing on its own — the first version of
+the resize-clamp test passed even with the clamp deleted, because
+`normalise()` quietly repaired the resulting negative ratio.
