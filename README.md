@@ -83,10 +83,27 @@ foreground under the default light theme, and external `arrangements` writes
 not triggering a rebuild.
 
 If `lxd init` created `lxdbr0` on a host that also runs Docker, guest egress
-will fail — Docker sets the `FORWARD` policy to DROP. The guest still gets a
-DHCP lease and reaches its gateway, which is the tell. Fix with
-`sudo iptables -I DOCKER-USER -i lxdbr0 -j ACCEPT` and the matching `-o` rule.
-Nothing in this harness needs guest networking, so it is optional.
+fails. The tell is a guest that holds a DHCP lease and pings its gateway but
+reaches nothing beyond it.
+
+No LXD setting fixes this. LXD's firewall driver here is nftables, so it
+writes to `table inet lxd`, while Docker sets the FORWARD policy to DROP in
+the iptables-nft `filter` table. Netfilter evaluates every table and a DROP
+anywhere wins, so LXD cannot override a policy in a table it does not own —
+`ipv4.firewall` is already `true` and LXD is doing its part.
+
+The declarative fix is Docker-side (`--ip-forward-no-drop`, Docker 28+):
+
+    /etc/docker/daemon.json
+    { "ip-forward-no-drop": true }
+
+then `sudo systemctl restart docker`. Note this drops Docker's global
+default-deny for *all* forwarded traffic, not just lxdbr0. LXD's documented
+`iptables -I DOCKER-USER -i lxdbr0 -j ACCEPT` is narrower but imperative and
+does not survive a reboot on its own.
+
+Nothing in this harness needs guest networking, so either way it is
+optional.
 
 ### Blast radius
 
