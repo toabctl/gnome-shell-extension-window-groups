@@ -44,10 +44,9 @@ const ARRANGEMENT_LABEL = {
     tabbed: 'Tabbed',
 };
 
-/** Group colours, modelled on Chrome's tab groups. 'none' comes first so
- *  cycling always has a way back to an unstyled group. */
+/** Group colours, modelled on Chrome's tab groups, grey first as its default. */
 const GROUP_COLORS = [
-    {name: 'none',   hex: null},
+    {name: 'grey',   hex: '#5f6368'},
     {name: 'blue',   hex: '#4285f4'},
     {name: 'red',    hex: '#ea4335'},
     {name: 'yellow', hex: '#fbbc04'},
@@ -60,6 +59,20 @@ const GROUP_COLORS = [
 
 function colorByName(name) {
     return GROUP_COLORS.find(c => c.name === name) ?? GROUP_COLORS[0];
+}
+
+/** Pick black or white text for a filled swatch. Chrome's yellow group needs
+ *  dark text where its blue needs light; sRGB relative luminance decides. */
+function contrastOn(hex) {
+    const channel = v => {
+        const c = parseInt(v, 16) / 255;
+        return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    };
+    const luminance =
+        0.2126 * channel(hex.slice(1, 3)) +
+        0.7152 * channel(hex.slice(3, 5)) +
+        0.0722 * channel(hex.slice(5, 7));
+    return luminance > 0.45 ? 'rgba(0,0,0,0.85)' : '#ffffff';
 }
 
 /** Windows we put in the sidebar and arrange. Dialogs follow their parent,
@@ -400,7 +413,7 @@ function iconButton(iconName, tooltip, styleClass = 'wg-icon-button') {
 
 const WindowRow = GObject.registerClass(
 class WindowRow extends St.Button {
-    _init(win, sidebar) {
+    _init(win, sidebar, color) {
         super._init({
             style_class: 'wg-window-row',
             x_expand: true,
@@ -420,6 +433,12 @@ class WindowRow extends St.Button {
             x_expand: true,
         });
         this.set_child(box);
+
+        // Chrome's group membership cue: a short coloured line down the left
+        // of every entry in the group.
+        const stripe = new St.Widget({style_class: 'wg-group-stripe'});
+        stripe.style = `background-color: ${color?.hex ?? GROUP_COLORS[0].hex};`;
+        box.add_child(stripe);
 
         const app = Shell.WindowTracker.get_default().get_window_app(win);
         box.add_child(app
@@ -552,11 +571,7 @@ class GroupSection extends St.BoxLayout {
         if (index === model.activeIndex)
             this.add_style_class_name('wg-group-active');
 
-        const color = model.color(index);
-        if (color.hex) {
-            this.style = `border-left: 3px solid ${color.hex};`;
-            this._nameButton.get_child().style = `color: ${color.hex};`;
-        }
+
 
     }
 
@@ -572,35 +587,36 @@ class GroupSection extends St.BoxLayout {
         });
         this.add_child(header);
 
+        // Chrome fills the group header itself with the group colour rather
+        // than showing a separate swatch, so the colour is the label.
         const color = this._model.color(this._index);
-        this._colorDot = new St.Button({
-            style_class: 'wg-color-dot',
-            can_focus: true,
-            track_hover: true,
-            accessible_name: `Group colour: ${color.name} — click to change`,
-            child: new St.Widget({style_class: 'wg-color-dot-swatch'}),
-        });
-        this._colorDot.get_child().style = color.hex
-            ? `background-color: ${color.hex};`
-            : 'background-color: transparent; border: 1px solid rgba(255,255,255,0.45);';
-        this._colorDot.connect('clicked', () => {
-            this._model.cycleColor(this._index);
-            this._sidebar.queueRebuild();
-        });
-        addTooltip(this._colorDot, `Group colour: ${color.name} — click to change`);
-        header.add_child(this._colorDot);
+        const ink = contrastOn(color.hex);
+        // The border is always present and merely changes colour, so marking
+        // a group active cannot shift the layout. St's box-shadow support is
+        // patchy, so a border is the dependable way to draw the ring.
+        const ring = this._index === this._model.activeIndex
+            ? 'rgba(255,255,255,0.9)' : 'transparent';
+        header.style =
+            `background-color: ${color.hex}; color: ${ink};` +
+            ` border: 2px solid ${ring};`;
 
         this._nameButton = new St.Button({
             style_class: 'wg-group-name-button',
             x_expand: true,
             can_focus: true,
+            x_align: Clutter.ActorAlign.FILL,
+            // St.Bin centres a child that does not expand, which centred the
+            // group name. Let the label fill instead and the text sits left.
             child: new St.Label({
                 text: this._model.name(this._index),
+                x_expand: true,
+                x_align: Clutter.ActorAlign.FILL,
                 y_align: Clutter.ActorAlign.CENTER,
                 style_class: 'wg-group-name',
             }),
         });
         this._nameButton.get_child().clutter_text.ellipsize = Pango.EllipsizeMode.END;
+        this._nameButton.get_child().style = `color: ${ink};`;
         this._nameButton.connect('clicked',
             () => this._model.workspace(this._index)?.activate(global.get_current_time()));
         this._nameButton.connect('button-press-event', (actor, event) => {
@@ -619,16 +635,28 @@ class GroupSection extends St.BoxLayout {
             ARRANGEMENT_ICON[arrangement],
             `How this group's windows are arranged: ${ARRANGEMENT_LABEL[arrangement]}` +
             ` — click for ${ARRANGEMENT_LABEL[nextArrangement]}`);
+        this._colorButton = iconButton('color-select-symbolic',
+            `Group colour: ${color.name} — click for the next one`,
+            'wg-icon-button');
+        this._colorButton.get_child().style = `color: ${ink};`;
+        this._colorButton.connect('clicked', () => {
+            this._model.cycleColor(this._index);
+            this._sidebar.queueRebuild();
+        });
+        header.add_child(this._colorButton);
+
         this._arrangeButton.connect('clicked', () => {
             this._model.cycleArrangement(this._index);
             this._sidebar.queueRebuild();
         });
+        this._arrangeButton.get_child().style = `color: ${ink};`;
         header.add_child(this._arrangeButton);
 
         const remove = iconButton('window-close-symbolic',
             'Delete this group (its windows move to the group above)');
         remove.connect('clicked', () => this._model.removeGroup(this._index));
         remove.reactive = this._model.count > 1;
+        remove.get_child().style = `color: ${ink};`;
         header.add_child(remove);
 
         // Drag the header to reorder groups. The delegate is the section so
@@ -689,7 +717,7 @@ class GroupSection extends St.BoxLayout {
     }
 
     addWindow(win, focused) {
-        const row = new WindowRow(win, this._sidebar);
+        const row = new WindowRow(win, this._sidebar, this._model.color(this._index));
         row.setFocused(focused);
         this._rows.push(row);
         this._rowBox.add_child(row);

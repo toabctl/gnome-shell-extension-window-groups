@@ -52,6 +52,17 @@ identity — `get_id()` and `get_stable_sequence()` are session-scoped — so a
 tag attached to one particular window cannot be reattached after a restart.
 Tags render with a dashed outline to make that visible rather than silent.
 
+## Look
+
+Modelled on Chrome's vertical tab groups: the group header is a filled pill in
+the group colour with the name left-aligned, and every window in the group
+carries a short line of that colour down its left edge. Text on the pill is
+black or white depending on the fill's sRGB relative luminance, so yellow gets
+dark ink where blue and purple get light. The active group's pill is ringed.
+
+Palette: grey, blue, red, yellow, green, pink, purple, cyan, orange — grey is
+the default, as in Chrome.
+
 ## Auto-hide
 
     gsettings set org.gnome.shell.extensions.window-groups auto-hide true

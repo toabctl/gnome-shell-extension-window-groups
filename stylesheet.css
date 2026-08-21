@@ -18,21 +18,23 @@
 
 .wg-group {
     border-radius: 8px;
-    padding: 2px;
+    padding: 0;
+    spacing: 2px;
 }
 
-.wg-group-active {
-    background-color: rgba(255, 255, 255, 0.06);
-}
+
 
 .wg-drop-target {
     background-color: rgba(53, 132, 228, 0.35);
     box-shadow: inset 0 0 0 1px rgba(53, 132, 228, 0.9);
 }
 
+/* A filled pill, like Chrome's group header. The background colour and the
+   contrasting text colour are applied inline per group. */
 .wg-group-header {
     spacing: 2px;
-    padding: 2px 2px;
+    padding: 1px 2px 1px 6px;
+    border-radius: 8px;
 }
 
 .wg-group-name-button {
@@ -41,11 +43,10 @@
 }
 
 .wg-group-name-button:hover {
-    background-color: rgba(255, 255, 255, 0.1);
+    background-color: rgba(255, 255, 255, 0.18);
 }
 
 .wg-group-name {
-    font-weight: bold;
     font-size: 0.95em;
     color: #ffffff;
 }
@@ -80,6 +81,14 @@
 
 .wg-window-row-content {
     spacing: 8px;
+}
+
+/* The membership cue: one short line per entry, in the group colour. */
+.wg-group-stripe {
+    width: 3px;
+    min-height: 20px;
+    border-radius: 999px;
+    margin: 1px 6px 1px 9px;
 }
 
 .wg-window-title {
@@ -119,24 +128,8 @@
     background-color: rgba(255, 255, 255, 0.16);
 }
 
-.wg-color-dot {
-    padding: 3px;
-    border-radius: 999px;
-}
 
-.wg-color-dot:hover {
-    background-color: rgba(255, 255, 255, 0.15);
-}
 
-.wg-color-dot-swatch {
-    width: 10px;
-    height: 10px;
-    border-radius: 999px;
-}
-
-.wg-group {
-    border-left: 3px solid transparent;
-}
 
 .wg-tag-chip {
     font-size: 0.75em;
