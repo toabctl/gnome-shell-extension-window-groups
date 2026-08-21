@@ -24,6 +24,10 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import {computeLayout, resizeToState} from './layouts.js';
 import {rankWindows} from './search.js';
+import {Arranger} from './arranger.js';
+import {
+    padArray, moveItem, removeItem, indexOfName, chooseGroupSlot, contrastOn,
+} from './model.js';
 
 const ICON_SIZE = 18;
 const COMPACT_ICON_SIZE = 24;
@@ -85,20 +89,6 @@ const GROUP_COLORS = [
 
 function colorByName(name) {
     return GROUP_COLORS.find(c => c.name === name) ?? GROUP_COLORS[0];
-}
-
-/** Pick black or white text for a filled swatch. Chrome's yellow group needs
- *  dark text where its blue needs light; sRGB relative luminance decides. */
-function contrastOn(hex) {
-    const channel = v => {
-        const c = parseInt(v, 16) / 255;
-        return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-    };
-    const luminance =
-        0.2126 * channel(hex.slice(1, 3)) +
-        0.7152 * channel(hex.slice(3, 5)) +
-        0.0722 * channel(hex.slice(5, 7));
-    return luminance > 0.45 ? 'rgba(0,0,0,0.85)' : '#ffffff';
 }
 
 /** Windows we put in the sidebar and arrange. Dialogs follow their parent,
@@ -227,37 +217,32 @@ class GroupModel {
     }
 
     indexOfName(name) {
-        const wanted = name.trim().toLowerCase();
-        for (let i = 0; i < this.count; i++) {
-            if (this.name(i).trim().toLowerCase() === wanted)
-                return i;
-        }
-        return -1;
+        const names = Array.from({length: this.count}, (_, i) => this.rawName(i));
+        return indexOfName(names, name);
     }
 
-    /** Return the index of the group called `name`, creating it if needed.
-     *  Returns -1 if the cap would be exceeded. */
+    /** Index of the group called `name`, creating or recycling one if needed.
+     *  The decision itself lives in model.js and is unit tested. */
     ensureGroupNamed(name, cap) {
-        const existing = this.indexOfName(name);
-        if (existing !== -1)
-            return existing;
+        const names = Array.from({length: this.count}, (_, i) => this.rawName(i));
+        const windowCounts = names.map((_, i) => this.windows(i).length);
+        const {action, index} = chooseGroupSlot({names, windowCounts, name, cap});
 
-        // Reuse an unnamed, empty group before appending. Static workspaces
-        // GNOME created up front would otherwise linger as empty clutter
-        // above every auto-created group.
-        for (let i = 0; i < this.count; i++) {
-            if (this.rawName(i) === '' && this.windows(i).length === 0) {
-                this.setName(i, name);
-                return i;
-            }
+        switch (action) {
+        case 'existing':
+            return index;
+        case 'reuse':
+            this.setName(index, name);
+            return index;
+        case 'append': {
+            this.addGroup();
+            const appended = this.count - 1;
+            this.setName(appended, name);
+            return appended;
         }
-
-        if (this.count >= cap)
+        default:
             return -1;
-        this.addGroup();
-        const index = this.count - 1;
-        this.setName(index, name);
-        return index;
+        }
     }
 
     addGroup() {
@@ -295,18 +280,12 @@ class GroupModel {
     }
 
     _padded(values, fill) {
-        const out = values.slice();
-        while (out.length < this.count)
-            out.push(fill);
-        return out;
+        return padArray(values, this.count, fill);
     }
 
     _moveParallel(from, to) {
         const move = (getter, setter, fill) => {
-            const values = this._padded(getter(), fill);
-            const [item] = values.splice(from, 1);
-            values.splice(to, 0, item);
-            setter(values);
+            setter(moveItem(this._padded(getter(), fill), from, to));
         };
         move(() => this._wmPrefs.get_strv('workspace-names'),
             v => this._wmPrefs.set_strv('workspace-names', v), '');
@@ -320,9 +299,7 @@ class GroupModel {
 
     _spliceParallel(index) {
         const splice = (getter, setter, fill) => {
-            const values = this._padded(getter(), fill);
-            values.splice(index, 1);
-            setter(values);
+            setter(removeItem(this._padded(getter(), fill), index));
         };
         splice(() => this._wmPrefs.get_strv('workspace-names'),
             v => this._wmPrefs.set_strv('workspace-names', v), '');
@@ -379,174 +356,6 @@ class TagStore {
 /* -------------------------------------------------------------------------
  * Arranger: applies a group's arrangement
  * ---------------------------------------------------------------------- */
-
-class Arranger {
-    constructor(model) {
-        this._model = model;
-        this._pending = new Set();
-        this._idleId = 0;
-        // Frame geometry as it was before we first tiled a window, so
-        // switching a group back to 'free' is not a one-way door.
-        this._preTile = new Map();
-    }
-
-    destroy() {
-        if (this._idleId) {
-            GLib.source_remove(this._idleId);
-            this._idleId = 0;
-        }
-        this._pending.clear();
-        this._preTile.clear();
-    }
-
-    /** Queue a group for layout. Coalesced to one pass per idle: a burst of
-     *  window-added and workarea-changed signals must not each move every
-     *  window in the group. */
-    schedule(index) {
-        if (index < 0 || index >= this._model.count)
-            return;
-        this._pending.add(index);
-        if (this._idleId)
-            return;
-        this._idleId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
-            this._idleId = 0;
-            const groups = [...this._pending];
-            this._pending.clear();
-            for (const i of groups)
-                this.apply(i);
-            return GLib.SOURCE_REMOVE;
-        });
-    }
-
-    scheduleAll() {
-        for (let i = 0; i < this._model.count; i++)
-            this.schedule(i);
-    }
-
-    forget(win) {
-        this._preTile.delete(win);
-    }
-
-    /** Windows a layout is allowed to place. Everything excluded here would
-     *  either fight us or be actively wrong to move. */
-    _tileable(win) {
-        return isManagedWindow(win) &&
-            !win.minimized &&
-            !win.is_fullscreen() &&
-            !win.is_on_all_workspaces() &&
-            win.allows_resize() &&
-            win.allows_move();
-    }
-
-    /** The tiled windows of a group, grouped by the monitor they are on.
-     *  A group is a workspace and a workspace spans every monitor, so each
-     *  monitor is laid out independently against its own work area. */
-    _byMonitor(index) {
-        const map = new Map();
-        for (const win of this._model.windows(index)) {
-            if (!this._tileable(win))
-                continue;
-            const monitor = win.get_monitor();
-            if (monitor < 0)
-                continue;
-            if (!map.has(monitor))
-                map.set(monitor, []);
-            map.get(monitor).push(win);
-        }
-        return map;
-    }
-
-    apply(index) {
-        const kind = this._model.arrangement(index);
-        if (kind === 'free') {
-            this._restoreGroup(index);
-            return;
-        }
-
-        const state = this._model.layoutState(index);
-        for (const [monitor, windows] of this._byMonitor(index)) {
-            const area = Main.layoutManager.getWorkAreaForMonitor(monitor);
-            if (!area)
-                continue;
-            const rects = computeLayout(kind, windows.length, area, state);
-            if (!rects)
-                continue;
-            windows.forEach((win, i) => this._place(win, rects[i]));
-        }
-
-        const focus = global.display.focus_window;
-        if (kind === 'tabbed' && focus?.get_workspace()?.index() === index)
-            focus.raise();
-    }
-
-    _place(win, rect) {
-        if (!this._preTile.has(win)) {
-            this._preTile.set(win, {
-                rect: win.get_frame_rect(),
-                maximized: win.maximized_horizontally || win.maximized_vertically,
-            });
-        }
-
-        // A maximized window ignores move_resize_frame, so it has to come out
-        // of that state first or the layout silently does nothing.
-        if (win.maximized_horizontally || win.maximized_vertically)
-            win.unmaximize(Meta.MaximizeFlags.HORIZONTAL | Meta.MaximizeFlags.VERTICAL);
-
-        const current = win.get_frame_rect();
-        if (current.x === rect.x && current.y === rect.y &&
-            current.width === rect.width && current.height === rect.height)
-            return;
-
-        // move_resize_frame is advisory: a client may clamp to its own minimum
-        // size. We never read the result back to correct it, precisely so a
-        // stubborn window cannot drive an endless resize loop.
-        win.move_resize_frame(false, rect.x, rect.y, rect.width, rect.height);
-    }
-
-    _restoreGroup(index) {
-        for (const win of this._model.windows(index)) {
-            const stash = this._preTile.get(win);
-            if (!stash)
-                continue;
-            this._preTile.delete(win);
-            if (stash.maximized) {
-                win.maximize(Meta.MaximizeFlags.HORIZONTAL | Meta.MaximizeFlags.VERTICAL);
-                continue;
-            }
-            const {x, y, width, height} = stash.rect;
-            win.move_resize_frame(false, x, y, width, height);
-        }
-    }
-
-    /** Turn a finished drag-resize into layout state, so resizing a tiled
-     *  window edits the layout rather than being snapped away on the next
-     *  pass. */
-    absorbResize(win) {
-        const index = win.get_workspace()?.index();
-        if (index === undefined || index < 0)
-            return false;
-        const kind = this._model.arrangement(index);
-        if (kind === 'free' || kind === 'tabbed' || kind === 'grid')
-            return false;
-
-        const peers = this._byMonitor(index).get(win.get_monitor());
-        if (!peers || peers.length < 2)
-            return false;
-        const slot = peers.indexOf(win);
-        if (slot === -1)
-            return false;
-
-        const area = Main.layoutManager.getWorkAreaForMonitor(win.get_monitor());
-        if (!area)
-            return false;
-
-        const state = this._model.layoutState(index);
-        this._model.setLayoutState(index, resizeToState(
-            kind, peers.length, slot, win.get_frame_rect(), area, state));
-        this.schedule(index);
-        return true;
-    }
-}
 
 /* -------------------------------------------------------------------------
  * Widgets
@@ -1704,7 +1513,22 @@ export default class WindowGroupsExtension extends Extension {
             this._mutterSettings.set_boolean('dynamic-workspaces', false);
 
         this._model = new GroupModel(this._settings);
-        this._arranger = new Arranger(this._model);
+        this._arranger = new Arranger({
+            model: this._model,
+            env: {
+                getWorkAreaForMonitor: m =>
+                    Main.layoutManager.getWorkAreaForMonitor(m),
+                getFocusWindow: () => global.display.focus_window,
+                isManaged: isManagedWindow,
+                defer: fn => GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                    fn();
+                    return GLib.SOURCE_REMOVE;
+                }),
+                cancel: handle => GLib.source_remove(handle),
+                maximizeFlags: Meta.MaximizeFlags.HORIZONTAL |
+                    Meta.MaximizeFlags.VERTICAL,
+            },
+        });
         this._tags = new TagStore();
         this._search = new WindowSearch(this._model, this._tags);
         this._sidebar = new Sidebar(

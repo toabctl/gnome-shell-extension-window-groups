@@ -246,6 +246,48 @@ Notes:
 - The Activities overview shows groups as workspaces — a second UI for the
   same thing, which this extension does not control.
 
+## Testing
+
+    make check      # lint + schema + 81 unit tests + 26 mutants, ~7s, no VM
+
+Two tiers run without a compositor:
+
+**Pure units.** `layouts.js` (geometry), `search.js` (ranking), `model.js`
+(parallel-array bookkeeping, name lookup, slot selection, colour contrast).
+None import GNOME.
+
+**Fake shell.** `arranger.js` takes every shell binding through an injected
+`env`, so `shell-stubs.mjs` can hand it fake windows, monitors and work areas
+and a scheduler the test pumps by hand. That covers the failures which
+previously needed a VM and a screenshot to notice: laying a group out against
+the wrong monitor, moving windows that must not be moved, running a layout
+pass on every keystroke, and leaking the pre-tile stash.
+
+### The mutation gate
+
+`node mutants.mjs` breaks the implementation 26 ways and requires each break
+to fail at least one test. This is not decoration. Two suites in this project
+were green with the behaviour they named deliberately deleted — the layout
+resize clamp (`normalise()` repaired the bad value it produced) and the search
+position cap (the assertion never reached the regime it protected). A third
+gap turned up while writing the gate: `forget()`, which releases the pre-tile
+stash when a window closes, had no test at all, so it could have been dropped
+and leaked every window ever tiled.
+
+Extracting `Arranger` also surfaced a live bug the fakes were too permissive
+to catch: it called `win.unmaximize()` with no arguments, which the real
+`Meta.Window` rejects. The flags now travel through `env` and both a test and
+a mutant pin it.
+
+### What is not covered here
+
+Anything needing a compositor: struts, real `move_resize_frame` results,
+enable/disable leaks, and every pointer interaction. Those are tiers 3 and 4 —
+`run-nested.sh` and `run-lxd.sh` — and are still driven by hand.
+`gnome-shell --headless` accepts `--virtual-monitor` more than once, so
+per-monitor behaviour is testable in the fast nested harness rather than
+needing a VM.
+
 ## Layout engine
 
 `layouts.js` holds the geometry and imports nothing from GNOME. Everything is
