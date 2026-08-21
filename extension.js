@@ -263,86 +263,40 @@ class GroupModel {
  * Tags
  * ---------------------------------------------------------------------- */
 
-const TAG_FIELDS = {
-    wm_class: win => win.get_wm_class(),
-    instance: win => win.get_wm_class_instance(),
-    app_id: win => win.get_gtk_application_id() ?? win.get_sandboxed_app_id(),
-    title: win => win.get_title(),
-};
-
-/** Cap on groups the engine will create by itself, so a sloppy rule cannot
- *  spawn workspaces without bound. */
+/** Cap on groups the engine will create by itself. */
 const MAX_AUTO_GROUPS = 16;
 
-class TagEngine {
-    constructor(settings) {
-        this._settings = settings;
-        // Manual tags are keyed on the live Meta.Window. Mutter exposes no
-        // persistent per-window id — get_id() and get_stable_sequence() are
-        // session-scoped — so these deliberately do not outlive the session.
-        this._manual = new Map();
+/** One tag per window, held for the lifetime of the session.
+ *
+ *  Mutter exposes no persistent per-window identity — get_id() and
+ *  get_stable_sequence() are both session-scoped — so a tag attached to a
+ *  particular window cannot be reattached after a restart. Keying on the
+ *  live Meta.Window makes that limit explicit instead of pretending
+ *  otherwise.
+ */
+class TagStore {
+    constructor() {
+        this._tags = new Map();
     }
 
     destroy() {
-        this._manual.clear();
-        this._settings = null;
+        this._tags.clear();
     }
 
-    rules() {
-        let parsed;
-        try {
-            parsed = JSON.parse(this._settings.get_string('tag-rules'));
-        } catch (e) {
-            logError(e, 'window-groups: tag-rules is not valid JSON');
-            return [];
-        }
-        if (!Array.isArray(parsed))
-            return [];
-        return parsed.filter(r => r && TAG_FIELDS[r.field] && r.pattern && r.tag);
+    tag(win) {
+        return this._tags.get(win) ?? '';
     }
 
-    ruleTags(win) {
-        const tags = [];
-        for (const rule of this.rules()) {
-            const value = TAG_FIELDS[rule.field](win);
-            if (!value)
-                continue;
-            let re;
-            try {
-                re = new RegExp(rule.pattern, 'i');
-            } catch (e) {
-                continue;
-            }
-            if (re.test(value) && !tags.includes(rule.tag))
-                tags.push(rule.tag);
-        }
-        return tags;
-    }
-
-    manualTags(win) {
-        return [...(this._manual.get(win) ?? [])];
-    }
-
-    setManualTags(win, tags) {
-        const cleaned = tags.map(t => t.trim()).filter(t => t.length > 0);
-        if (cleaned.length)
-            this._manual.set(win, new Set(cleaned));
+    setTag(win, tag) {
+        const cleaned = tag.trim();
+        if (cleaned)
+            this._tags.set(win, cleaned);
         else
-            this._manual.delete(win);
+            this._tags.delete(win);
     }
 
     forget(win) {
-        this._manual.delete(win);
-    }
-
-    /** Manual tags win, so hand-tagging can override a rule. */
-    tags(win) {
-        const manual = this.manualTags(win);
-        return [...manual, ...this.ruleTags(win).filter(t => !manual.includes(t))];
-    }
-
-    primaryTag(win) {
-        return this.tags(win)[0] ?? null;
+        this._tags.delete(win);
     }
 }
 
@@ -437,19 +391,13 @@ class WindowRow extends St.Button {
         this.updateTitle();
 
         this._box = box;
-        const tags = sidebar?.tags;
-        if (tags) {
-            const manual = tags.manualTags(win);
-            for (const tag of tags.tags(win)) {
-                const chip = new St.Label({
-                    text: tag,
-                    style_class: manual.includes(tag)
-                        ? 'wg-tag-chip wg-tag-chip-manual'
-                        : 'wg-tag-chip',
-                    y_align: Clutter.ActorAlign.CENTER,
-                });
-                box.add_child(chip);
-            }
+        const tag = sidebar?.tags?.tag(win);
+        if (tag) {
+            box.add_child(new St.Label({
+                text: tag,
+                style_class: 'wg-tag-chip',
+                y_align: Clutter.ActorAlign.CENTER,
+            }));
         }
 
         this._draggable = DND.makeDraggable(this, {dragActorOpacity: 200});
@@ -477,7 +425,7 @@ class WindowRow extends St.Button {
 
         const entry = new St.Entry({
             style_class: 'wg-tag-entry',
-            text: tags.manualTags(this._win).join(', '),
+            text: tags.tag(this._win),
             x_expand: true,
         });
         this._label.hide();
@@ -485,8 +433,8 @@ class WindowRow extends St.Button {
 
         const finish = commit => {
             if (commit) {
-                tags.setManualTags(this._win, entry.get_text().split(','));
-                this._sidebar.autoAssign(this._win, true);
+                tags.setTag(this._win, entry.get_text());
+                this._sidebar.applyTag(this._win);
             }
             this._sidebar.queueRebuild();
         };
@@ -717,9 +665,6 @@ class Sidebar {
         this._arranger = arranger;
         this._settings = settings;
         this.tags = tags;
-        // Assign a window at most once, so dragging it elsewhere by hand is
-        // not undone the next time anything triggers a rebuild.
-        this._assigned = new WeakSet();
         this._sections = [];
         this._rebuildId = 0;
         this._trackedWindows = new Set();
@@ -788,20 +733,21 @@ class Sidebar {
         this.actor = null;
     }
 
-    /** Move a window into the group named after its first tag, creating that
-     *  group if it does not exist yet. `force` re-runs it after a manual
-     *  tag edit. */
-    autoAssign(win, force = false) {
-        if (!this._settings.get_boolean('auto-group'))
+    /** Move a window into the group named after its tag, creating that group
+     *  if it does not exist yet. Only ever called when a tag is set by hand. */
+    applyTag(win) {
+        if (!this._settings.get_boolean('auto-group')) {
+            this.queueRebuild();
             return;
-        if (!force && this._assigned.has(win))
-            return;
+        }
         if (!isManagedWindow(win))
             return;
 
-        const tag = this.tags.primaryTag(win);
-        if (!tag)
+        const tag = this.tags.tag(win);
+        if (!tag) {
+            this.queueRebuild();
             return;
+        }
 
         const index = this._model.ensureGroupNamed(tag, MAX_AUTO_GROUPS);
         if (index === -1) {
@@ -810,7 +756,6 @@ class Sidebar {
             return;
         }
 
-        this._assigned.add(win);
         this._model.moveWindowToGroup(win, index);
         this.queueRebuild();
     }
@@ -891,29 +836,14 @@ export default class WindowGroupsExtension extends Extension {
 
         this._model = new GroupModel(this._settings);
         this._arranger = new Arranger(this._model);
-        this._tags = new TagEngine(this._settings);
+        this._tags = new TagStore();
         this._sidebar = new Sidebar(
             this._model, this._arranger, this._settings, this._tags);
 
         global.display.connectObject(
             'window-created', (display, win) => {
-                if (!isManagedWindow(win))
-                    return;
-                // wm_class and title are frequently unset at window-created;
-                // first-frame is the earliest point they are reliable.
-                const actor = win.get_compositor_private();
-                if (actor) {
-                    const id = actor.connect('first-frame', () => {
-                        actor.disconnect(id);
-                        this._sidebar?.autoAssign(win);
-                    });
-                } else {
-                    GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
-                        this._sidebar?.autoAssign(win);
-                        return GLib.SOURCE_REMOVE;
-                    });
-                }
-                this._sidebar.queueRebuild();
+                if (isManagedWindow(win))
+                    this._sidebar.queueRebuild();
             },
             'notify::focus-window', () => this._sidebar.queueRebuild(),
             'grab-op-end', (display, win, op) => {
@@ -951,7 +881,6 @@ export default class WindowGroupsExtension extends Extension {
             // unrelated event happened to trigger a rebuild.
             'changed::arrangements', () => this._sidebar.queueRebuild(),
             'changed::colors', () => this._sidebar.queueRebuild(),
-            'changed::tag-rules', () => this._sidebar.queueRebuild(),
             'changed::auto-group', () => this._sidebar.queueRebuild(),
             this);
     }

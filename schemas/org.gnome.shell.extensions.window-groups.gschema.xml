@@ -10,13 +10,9 @@
       <default>[]</default>
       <summary>Per-group arrangement, parallel to workspace index: "free" or "tabbed"</summary>
     </key>
-    <key name="tag-rules" type="s">
-      <default>'[]'</default>
-      <summary>JSON array of {field, pattern, tag}; field is wm_class, instance, app_id or title; pattern is a case-insensitive regex</summary>
-    </key>
     <key name="auto-group" type="b">
       <default>true</default>
-      <summary>Move a newly created window into the group named after its first tag, creating that group if needed</summary>
+      <summary>When a window is tagged, move it into the group named after that tag, creating the group if needed</summary>
     </key>
     <key name="colors" type="as">
       <default>[]</default>
