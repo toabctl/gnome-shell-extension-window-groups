@@ -63,6 +63,21 @@ dark ink where blue and purple get light. The active group's pill is ringed.
 Palette: grey, blue, red, yellow, green, pink, purple, cyan, orange — grey is
 the default, as in Chrome.
 
+## Compact mode
+
+The button at the top-left of the sidebar shrinks it to icons only and back,
+as Chrome's vertical tabs do. Collapsed, a group becomes a small coloured pill
+with a chevron, its windows become plain application icons, and the per-row
+stripe disappears — the pill alone marks where a group starts, which is what
+Chrome does. Titles and group names move into hover tooltips.
+
+    gsettings set org.gnome.shell.extensions.window-groups compact true
+    gsettings set org.gnome.shell.extensions.window-groups compact-width 52
+
+The strut follows the actor's allocation (layout.js reconnects on
+`notify::allocation`), so the work area shrinks and grows with the sidebar
+without re-registering the chrome.
+
 ## Auto-hide
 
     gsettings set org.gnome.shell.extensions.window-groups auto-hide true

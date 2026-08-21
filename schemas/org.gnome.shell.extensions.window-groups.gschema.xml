@@ -10,6 +10,14 @@
       <default>[]</default>
       <summary>Per-group arrangement, parallel to workspace index: "free" or "tabbed"</summary>
     </key>
+    <key name="compact" type="b">
+      <default>false</default>
+      <summary>Shrink the sidebar to icons only, like Chrome's collapsed vertical tabs</summary>
+    </key>
+    <key name="compact-width" type="i">
+      <default>52</default>
+      <summary>Sidebar width in compact mode, in logical pixels</summary>
+    </key>
     <key name="auto-hide" type="b">
       <default>false</default>
       <summary>Slide the sidebar off screen and reveal it by pushing the pointer into the left edge</summary>

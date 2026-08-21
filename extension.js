@@ -25,6 +25,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {computeLayout, resizeToState} from './layouts.js';
 
 const ICON_SIZE = 18;
+const COMPACT_ICON_SIZE = 24;
 const REVEAL_TIMEOUT = 1000;
 const SLIDE_DURATION = 200;
 const HIDE_DELAY = 400;
@@ -596,7 +597,7 @@ function iconButton(iconName, tooltip, styleClass = 'wg-icon-button') {
 
 const WindowRow = GObject.registerClass(
 class WindowRow extends St.Button {
-    _init(win, sidebar, color) {
+    _init(win, sidebar, color, compact) {
         super._init({
             style_class: 'wg-window-row',
             x_expand: true,
@@ -614,19 +615,23 @@ class WindowRow extends St.Button {
             orientation: Clutter.Orientation.HORIZONTAL,
             style_class: 'wg-window-row-content',
             x_expand: true,
+            x_align: compact ? Clutter.ActorAlign.CENTER : Clutter.ActorAlign.FILL,
         });
         this.set_child(box);
 
         // Chrome's group membership cue: a short coloured line down the left
         // of every entry in the group.
-        const stripe = new St.Widget({style_class: 'wg-group-stripe'});
-        stripe.style = `background-color: ${color?.hex ?? GROUP_COLORS[0].hex};`;
-        box.add_child(stripe);
+        if (!compact) {
+            const stripe = new St.Widget({style_class: 'wg-group-stripe'});
+            stripe.style = `background-color: ${color?.hex ?? GROUP_COLORS[0].hex};`;
+            box.add_child(stripe);
+        }
 
+        const iconSize = compact ? COMPACT_ICON_SIZE : ICON_SIZE;
         const app = Shell.WindowTracker.get_default().get_window_app(win);
         box.add_child(app
-            ? app.create_icon_texture(ICON_SIZE)
-            : new St.Icon({icon_name: 'application-x-executable-symbolic', icon_size: ICON_SIZE}));
+            ? app.create_icon_texture(iconSize)
+            : new St.Icon({icon_name: 'application-x-executable-symbolic', icon_size: iconSize}));
 
         this._label = new St.Label({
             y_align: Clutter.ActorAlign.CENTER,
@@ -634,11 +639,18 @@ class WindowRow extends St.Button {
             style_class: 'wg-window-title',
         });
         this._label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
-        box.add_child(this._label);
         this.updateTitle();
+        if (compact) {
+            // No room for a title, so the tooltip carries it instead.
+            this.track_hover = true;
+            addTooltip(this, win.get_title() ?? '');
+            this.add_style_class_name('wg-compact-row');
+        } else {
+            box.add_child(this._label);
+        }
 
         this._box = box;
-        const tag = sidebar?.tags?.tag(win);
+        const tag = compact ? null : sidebar?.tags?.tag(win);
         if (tag) {
             box.add_child(new St.Label({
                 text: tag,
@@ -729,7 +741,7 @@ class WindowRow extends St.Button {
 
 const GroupSection = GObject.registerClass(
 class GroupSection extends St.BoxLayout {
-    _init(index, model, sidebar) {
+    _init(index, model, sidebar, compact) {
         super._init({
             orientation: Clutter.Orientation.VERTICAL,
             style_class: 'wg-group',
@@ -740,9 +752,13 @@ class GroupSection extends St.BoxLayout {
         this._model = model;
         this._sidebar = sidebar;
         this._rows = [];
+        this._compact = compact;
         this._delegate = this;
 
-        this._buildHeader();
+        if (compact)
+            this._buildCompactHeader();
+        else
+            this._buildHeader();
 
         this._rowBox = new St.BoxLayout({
             orientation: Clutter.Orientation.VERTICAL,
@@ -862,6 +878,41 @@ class GroupSection extends St.BoxLayout {
         this._header = header;
     }
 
+    /** Collapsed groups get only a coloured bar, as in Chrome. Editing the
+     *  name, colour or layout means expanding the sidebar again. */
+    _buildCompactHeader() {
+        const color = this._model.color(this._index);
+        const header = new St.Button({
+            style_class: 'wg-compact-header',
+            can_focus: true,
+            track_hover: true,
+            x_align: Clutter.ActorAlign.CENTER,
+            child: new St.Icon({
+                icon_name: 'pan-down-symbolic',
+                icon_size: 12,
+                style: `color: ${contrastOn(color.hex)};`,
+            }),
+        });
+        header.style = `background-color: ${color.hex};`;
+        if (this._index === this._model.activeIndex)
+            header.add_style_class_name('wg-compact-header-active');
+        header.connect('clicked',
+            () => this._model.workspace(this._index)?.activate(global.get_current_time()));
+        addTooltip(header, this._model.name(this._index));
+
+        header._delegate = this;
+        this._headerDraggable = DND.makeDraggable(header, {dragActorOpacity: 200});
+        this._headerDraggable.connect('drag-begin',
+            () => this.add_style_class_name('wg-dragging'));
+        this._headerDraggable.connect('drag-end',
+            () => this.remove_style_class_name('wg-dragging'));
+        this._headerDraggable.connect('drag-cancelled',
+            () => this.remove_style_class_name('wg-dragging'));
+
+        this.add_child(header);
+        this._header = header;
+    }
+
     getDragActor() {
         return new St.Label({
             text: this._model.name(this._index),
@@ -904,7 +955,8 @@ class GroupSection extends St.BoxLayout {
     }
 
     addWindow(win, focused) {
-        const row = new WindowRow(win, this._sidebar, this._model.color(this._index));
+        const row = new WindowRow(win, this._sidebar,
+            this._model.color(this._index), this._compact);
         row.setFocused(focused);
         this._rows.push(row);
         this._rowBox.add_child(row);
@@ -970,6 +1022,22 @@ class Sidebar {
             reactive: true,
         });
 
+        this._compact = this._settings.get_boolean('compact');
+
+        // Chrome puts the collapse toggle at the top-left of the strip.
+        this._toggle = iconButton('sidebar-show-symbolic',
+            this._compact ? 'Expand the sidebar' : 'Shrink the sidebar to icons',
+            'wg-icon-button wg-toggle');
+        this._toggle.connect('clicked',
+            () => this._settings.set_boolean('compact', !this._compact));
+        const toggleRow = new St.BoxLayout({
+            orientation: Clutter.Orientation.HORIZONTAL,
+            style_class: 'wg-toggle-row',
+            x_expand: true,
+        });
+        toggleRow.add_child(this._toggle);
+        this.actor.add_child(toggleRow);
+
         this._scroll = new St.ScrollView({
             style_class: 'wg-scroll',
             hscrollbar_policy: St.PolicyType.NEVER,
@@ -989,8 +1057,13 @@ class Sidebar {
             style_class: 'wg-new-group',
             x_expand: true,
             can_focus: true,
-            child: new St.Label({text: '+  New group', x_align: Clutter.ActorAlign.CENTER}),
+            track_hover: true,
+            child: this._compact
+                ? new St.Icon({icon_name: 'list-add-symbolic', icon_size: 16})
+                : new St.Label({text: '+  New group', x_align: Clutter.ActorAlign.CENTER}),
         });
+        if (this._compact)
+            addTooltip(newGroup, 'New group');
         newGroup.connect('clicked', () => this._model.addGroup());
         this.actor.add_child(newGroup);
 
@@ -1191,7 +1264,9 @@ class Sidebar {
         if (!monitor)
             return;
         const top = Main.layoutManager.panelBox.height;
-        const width = this._settings.get_int('sidebar-width');
+        const width = this._compact
+            ? this._settings.get_int('compact-width')
+            : this._settings.get_int('sidebar-width');
         // x1 <= monitor.x is what makes layout.js classify this as a
         // Meta.Side.LEFT strut, so the work area shrinks for real.
         this.actor.set_position(monitor.x, monitor.y + top);
@@ -1217,7 +1292,7 @@ class Sidebar {
         const focus = global.display.focus_window;
 
         for (let i = 0; i < this._model.count; i++) {
-            const section = new GroupSection(i, this._model, this);
+            const section = new GroupSection(i, this._model, this, this._compact);
             this._groupBox.add_child(section);
             this._sections.push(section);
 
@@ -1349,6 +1424,10 @@ export default class WindowGroupsExtension extends Extension {
 
         this._settings.connectObject(
             'changed::sidebar-width', () => this._sidebar.updateGeometry(),
+            // Width, row contents and header shape all differ, and the strut
+            // follows the actor's allocation, so a full rebuild is simplest.
+            'changed::compact', () => this._reloadSidebar(),
+            'changed::compact-width', () => this._sidebar.updateGeometry(),
             // The header buttons call queueRebuild() themselves, but a write
             // from outside (gsettings, a prefs dialog, a second monitor of
             // the same key) would otherwise not be picked up until some

@@ -154,3 +154,32 @@
     font-size: 0.85em;
     color: #ffffff;
 }
+
+/* ---- compact mode: Chrome's collapsed vertical tabs ------------------- */
+
+.wg-toggle-row {
+    padding: 2px 4px 4px 6px;
+}
+
+.wg-toggle {
+    color: rgba(255, 255, 255, 0.75);
+}
+
+/* A small coloured pill with a chevron, standing in for the whole header. */
+.wg-compact-header {
+    border-radius: 6px;
+    padding: 2px 6px;
+    margin: 4px 0 2px 0;
+}
+
+.wg-compact-header-active {
+    border: 2px solid rgba(255, 255, 255, 0.9);
+}
+
+.wg-compact-row {
+    padding: 4px 0;
+}
+
+.wg-compact-row .wg-window-row-content {
+    spacing: 0;
+}
