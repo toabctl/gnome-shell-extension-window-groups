@@ -215,3 +215,24 @@ dropping the outer gap, or breaking the grid shape all make it fail. That
 matters because a green suite proves nothing on its own — the first version of
 the resize-clamp test passed even with the clamp deleted, because
 `normalise()` quietly repaired the resulting negative ratio.
+
+
+### Known limits of the shell side
+
+- **Clients that refuse to shrink.** `move_resize_frame` is advisory; a window
+  clamps to its own minimum and then overlaps its neighbour. Visible with five
+  columns on a 1920-wide work area, where Calculator and Yelp both bottom out
+  around 358px. There is no corrective pass, because on Wayland the resize is
+  asynchronous — reading the frame back immediately returns the old geometry,
+  so a fix has to observe `size-changed`, record the observed minimum per
+  window and feed it back as a constraint. Bounded, but not free.
+- **Ratios reset when the window count changes.** They are stored per slot, so
+  opening a window in a group you had resized falls back to equal shares.
+- **Restore does not clamp to the work area.** Switching a group back to
+  `free` puts windows exactly where they were, which can be partly under the
+  sidebar if they were placed before it existed.
+- **Order is creation order.** Reordering rows within a group to drive the
+  layout order needs a per-window order list, which cannot survive logout for
+  the same reason tags cannot.
+- A competing tiler will fight this. `tiling-assistant@ubuntu.com` ships
+  enabled on Ubuntu and must be disabled.

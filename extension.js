@@ -22,26 +22,48 @@ import * as DND from 'resource:///org/gnome/shell/ui/dnd.js';
 import * as Layout from 'resource:///org/gnome/shell/ui/layout.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
+import {computeLayout, resizeToState} from './layouts.js';
+
 const ICON_SIZE = 18;
 const REVEAL_TIMEOUT = 1000;
 const SLIDE_DURATION = 200;
 const HIDE_DELAY = 400;
 const TOOLTIP_DELAY = 450;
+
+/** Every grab op that means "the user resized this window". */
+const RESIZE_GRAB_OPS = new Set([
+    Meta.GrabOp.RESIZING_N, Meta.GrabOp.RESIZING_S,
+    Meta.GrabOp.RESIZING_E, Meta.GrabOp.RESIZING_W,
+    Meta.GrabOp.RESIZING_NE, Meta.GrabOp.RESIZING_NW,
+    Meta.GrabOp.RESIZING_SE, Meta.GrabOp.RESIZING_SW,
+    Meta.GrabOp.KEYBOARD_RESIZING_N, Meta.GrabOp.KEYBOARD_RESIZING_S,
+    Meta.GrabOp.KEYBOARD_RESIZING_E, Meta.GrabOp.KEYBOARD_RESIZING_W,
+    Meta.GrabOp.KEYBOARD_RESIZING_NE, Meta.GrabOp.KEYBOARD_RESIZING_NW,
+    Meta.GrabOp.KEYBOARD_RESIZING_SE, Meta.GrabOp.KEYBOARD_RESIZING_SW,
+    Meta.GrabOp.KEYBOARD_RESIZING_UNKNOWN,
+]);
 const BUTTON_ICON_SIZE = 14;
 
-/** Arrangements a group can use. Deliberately only two for now: the
- *  sidebar UX is what needs validating, and real tiling is a separate
- *  (much larger) problem best delegated to an existing tiling extension. */
-const ARRANGEMENTS = ['free', 'tabbed'];
+/** Arrangements a group can use. The geometry lives in layouts.js, which
+ *  imports nothing from GNOME and is unit tested separately. */
+const ARRANGEMENTS = ['free', 'tabbed', 'columns', 'rows', 'grid', 'master-stack'];
 
 const ARRANGEMENT_ICON = {
-    free: 'view-grid-symbolic',
-    tabbed: 'view-paged-symbolic',
+    'free': 'window-restore-symbolic',
+    'tabbed': 'view-paged-symbolic',
+    'columns': 'view-dual-symbolic',
+    'rows': 'view-continuous-symbolic',
+    'grid': 'view-grid-symbolic',
+    'master-stack': 'view-list-symbolic',
 };
 
 const ARRANGEMENT_LABEL = {
-    free: 'Free',
-    tabbed: 'Tabbed',
+    'free': 'Free',
+    'tabbed': 'Tabbed',
+    'columns': 'Columns',
+    'rows': 'Rows',
+    'grid': 'Grid',
+    'master-stack': 'Master + stack',
 };
 
 /** Group colours, modelled on Chrome's tab groups, grey first as its default. */
@@ -154,7 +176,7 @@ class GroupModel {
     }
 
     setColor(index, name) {
-        const values = this._padded(this._settings.get_strv('colors'), 'none');
+        const values = this._padded(this._settings.get_strv('colors'), 'grey');
         values[index] = name;
         this._settings.set_strv('colors', values);
     }
@@ -164,6 +186,31 @@ class GroupModel {
         const next = GROUP_COLORS[(current + 1) % GROUP_COLORS.length];
         this.setColor(index, next.name);
         return next;
+    }
+
+    layoutState(index) {
+        const raw = this._settings.get_strv('layout-states')[index];
+        let parsed = {};
+        if (raw) {
+            try {
+                parsed = JSON.parse(raw) ?? {};
+            } catch (e) {
+                parsed = {};
+            }
+        }
+        return {
+            ...parsed,
+            gap: this._settings.get_int('gap'),
+            outerGap: this._settings.get_int('outer-gap'),
+        };
+    }
+
+    setLayoutState(index, state) {
+        const values = this._padded(this._settings.get_strv('layout-states'), '{}');
+        // Gaps are global; only the per-group parts are stored.
+        const {gap: _g, outerGap: _o, ...rest} = state;
+        values[index] = JSON.stringify(rest);
+        this._settings.set_strv('layout-states', values);
     }
 
     windows(index) {
@@ -262,7 +309,9 @@ class GroupModel {
         move(() => this._settings.get_strv('arrangements'),
             v => this._settings.set_strv('arrangements', v), 'free');
         move(() => this._settings.get_strv('colors'),
-            v => this._settings.set_strv('colors', v), 'none');
+            v => this._settings.set_strv('colors', v), 'grey');
+        move(() => this._settings.get_strv('layout-states'),
+            v => this._settings.set_strv('layout-states', v), '{}');
     }
 
     _spliceParallel(index) {
@@ -276,7 +325,9 @@ class GroupModel {
         splice(() => this._settings.get_strv('arrangements'),
             v => this._settings.set_strv('arrangements', v), 'free');
         splice(() => this._settings.get_strv('colors'),
-            v => this._settings.set_strv('colors', v), 'none');
+            v => this._settings.set_strv('colors', v), 'grey');
+        splice(() => this._settings.get_strv('layout-states'),
+            v => this._settings.set_strv('layout-states', v), '{}');
     }
 }
 
@@ -328,36 +379,168 @@ class TagStore {
 class Arranger {
     constructor(model) {
         this._model = model;
+        this._pending = new Set();
+        this._idleId = 0;
+        // Frame geometry as it was before we first tiled a window, so
+        // switching a group back to 'free' is not a one-way door.
+        this._preTile = new Map();
     }
 
-    applyAll() {
+    destroy() {
+        if (this._idleId) {
+            GLib.source_remove(this._idleId);
+            this._idleId = 0;
+        }
+        this._pending.clear();
+        this._preTile.clear();
+    }
+
+    /** Queue a group for layout. Coalesced to one pass per idle: a burst of
+     *  window-added and workarea-changed signals must not each move every
+     *  window in the group. */
+    schedule(index) {
+        if (index < 0 || index >= this._model.count)
+            return;
+        this._pending.add(index);
+        if (this._idleId)
+            return;
+        this._idleId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._idleId = 0;
+            const groups = [...this._pending];
+            this._pending.clear();
+            for (const i of groups)
+                this.apply(i);
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    scheduleAll() {
         for (let i = 0; i < this._model.count; i++)
-            this.apply(i);
+            this.schedule(i);
+    }
+
+    forget(win) {
+        this._preTile.delete(win);
+    }
+
+    /** Windows a layout is allowed to place. Everything excluded here would
+     *  either fight us or be actively wrong to move. */
+    _tileable(win) {
+        return isManagedWindow(win) &&
+            !win.minimized &&
+            !win.is_fullscreen() &&
+            !win.is_on_all_workspaces() &&
+            win.allows_resize() &&
+            win.allows_move();
+    }
+
+    /** The tiled windows of a group, grouped by the monitor they are on.
+     *  A group is a workspace and a workspace spans every monitor, so each
+     *  monitor is laid out independently against its own work area. */
+    _byMonitor(index) {
+        const map = new Map();
+        for (const win of this._model.windows(index)) {
+            if (!this._tileable(win))
+                continue;
+            const monitor = win.get_monitor();
+            if (monitor < 0)
+                continue;
+            if (!map.has(monitor))
+                map.set(monitor, []);
+            map.get(monitor).push(win);
+        }
+        return map;
     }
 
     apply(index) {
-        if (this._model.arrangement(index) !== 'tabbed')
+        const kind = this._model.arrangement(index);
+        if (kind === 'free') {
+            this._restoreGroup(index);
             return;
+        }
 
-        // "Tabbed" is the same illusion browsers use: every window in the
-        // group gets identical geometry and the focused one is on top.
-        // Nothing is hidden, so there is nothing to get out of sync.
-        for (const win of this._model.windows(index)) {
-            if (win.minimized || win.fullscreen || !win.allows_resize())
-                continue;
-            const area = Main.layoutManager.getWorkAreaForMonitor(win.get_monitor());
+        const state = this._model.layoutState(index);
+        for (const [monitor, windows] of this._byMonitor(index)) {
+            const area = Main.layoutManager.getWorkAreaForMonitor(monitor);
             if (!area)
                 continue;
-            const frame = win.get_frame_rect();
-            if (frame.x === area.x && frame.y === area.y &&
-                frame.width === area.width && frame.height === area.height)
+            const rects = computeLayout(kind, windows.length, area, state);
+            if (!rects)
                 continue;
-            win.move_resize_frame(false, area.x, area.y, area.width, area.height);
+            windows.forEach((win, i) => this._place(win, rects[i]));
         }
 
         const focus = global.display.focus_window;
-        if (focus && focus.get_workspace()?.index() === index)
+        if (kind === 'tabbed' && focus?.get_workspace()?.index() === index)
             focus.raise();
+    }
+
+    _place(win, rect) {
+        if (!this._preTile.has(win)) {
+            this._preTile.set(win, {
+                rect: win.get_frame_rect(),
+                maximized: win.maximized_horizontally || win.maximized_vertically,
+            });
+        }
+
+        // A maximized window ignores move_resize_frame, so it has to come out
+        // of that state first or the layout silently does nothing.
+        if (win.maximized_horizontally || win.maximized_vertically)
+            win.unmaximize(Meta.MaximizeFlags.HORIZONTAL | Meta.MaximizeFlags.VERTICAL);
+
+        const current = win.get_frame_rect();
+        if (current.x === rect.x && current.y === rect.y &&
+            current.width === rect.width && current.height === rect.height)
+            return;
+
+        // move_resize_frame is advisory: a client may clamp to its own minimum
+        // size. We never read the result back to correct it, precisely so a
+        // stubborn window cannot drive an endless resize loop.
+        win.move_resize_frame(false, rect.x, rect.y, rect.width, rect.height);
+    }
+
+    _restoreGroup(index) {
+        for (const win of this._model.windows(index)) {
+            const stash = this._preTile.get(win);
+            if (!stash)
+                continue;
+            this._preTile.delete(win);
+            if (stash.maximized) {
+                win.maximize(Meta.MaximizeFlags.HORIZONTAL | Meta.MaximizeFlags.VERTICAL);
+                continue;
+            }
+            const {x, y, width, height} = stash.rect;
+            win.move_resize_frame(false, x, y, width, height);
+        }
+    }
+
+    /** Turn a finished drag-resize into layout state, so resizing a tiled
+     *  window edits the layout rather than being snapped away on the next
+     *  pass. */
+    absorbResize(win) {
+        const index = win.get_workspace()?.index();
+        if (index === undefined || index < 0)
+            return false;
+        const kind = this._model.arrangement(index);
+        if (kind === 'free' || kind === 'tabbed' || kind === 'grid')
+            return false;
+
+        const peers = this._byMonitor(index).get(win.get_monitor());
+        if (!peers || peers.length < 2)
+            return false;
+        const slot = peers.indexOf(win);
+        if (slot === -1)
+            return false;
+
+        const area = Main.layoutManager.getWorkAreaForMonitor(win.get_monitor());
+        if (!area)
+            return false;
+
+        const state = this._model.layoutState(index);
+        this._model.setLayoutState(index, resizeToState(
+            kind, peers.length, slot, win.get_frame_rect(), area, state));
+        this.schedule(index);
+        return true;
     }
 }
 
@@ -647,6 +830,10 @@ class GroupSection extends St.BoxLayout {
 
         this._arrangeButton.connect('clicked', () => {
             this._model.cycleArrangement(this._index);
+            // A fresh layout wants fresh ratios; stale ones belong to the
+            // previous arrangement's slot count.
+            this._model.setLayoutState(this._index, {});
+            this._sidebar.relayout(this._index);
             this._sidebar.queueRebuild();
         });
         this._arrangeButton.get_child().style = `color: ${ink};`;
@@ -748,7 +935,11 @@ class GroupSection extends St.BoxLayout {
     acceptDrop(source) {
         this.setDropHighlight(false);
         if (source instanceof WindowRow) {
+            const from = source.metaWindow.get_workspace()?.index();
             this._model.moveWindowToGroup(source.metaWindow, this._index);
+            if (from !== undefined)
+                this._sidebar.relayout(from);
+            this._sidebar.relayout(this._index);
             return true;
         }
         if (source instanceof GroupSection && source !== this) {
@@ -980,8 +1171,19 @@ class Sidebar {
             return;
         }
 
+        const from = win.get_workspace()?.index();
         this._model.moveWindowToGroup(win, index);
+        if (from !== undefined)
+            this.relayout(from);
+        this.relayout(index);
         this.queueRebuild();
+    }
+
+    relayout(index) {
+        if (index === undefined || index === null || index < 0)
+            this._arranger.scheduleAll();
+        else
+            this._arranger.schedule(index);
     }
 
     updateGeometry() {
@@ -1025,7 +1227,10 @@ class Sidebar {
             }
         }
 
-        this._arranger.applyAll();
+        // Deliberately not laying out here. rebuild() runs on every title
+        // change and focus change; driving geometry from it means every
+        // keystroke in a text editor can shove windows around.
+
     }
 
     _trackWindow(win) {
@@ -1034,11 +1239,21 @@ class Sidebar {
         this._trackedWindows.add(win);
         win.connectObject(
             'notify::title', () => this.queueRebuild(),
-            'notify::minimized', () => this.queueRebuild(),
-            'workspace-changed', () => this.queueRebuild(),
+            'notify::minimized', () => {
+                this.relayout(win.get_workspace()?.index());
+                this.queueRebuild();
+            },
+            'notify::fullscreen', () => this.relayout(win.get_workspace()?.index()),
+            'workspace-changed', () => {
+                this.relayout(win.get_workspace()?.index());
+                this.queueRebuild();
+            },
             'unmanaged', () => {
+                const index = win.get_workspace()?.index();
                 this._trackedWindows.delete(win);
                 this.tags?.forget(win);
+                this._arranger.forget(win);
+                this.relayout(index);
                 this.queueRebuild();
             },
             this);
@@ -1068,13 +1283,36 @@ export default class WindowGroupsExtension extends Extension {
 
         global.display.connectObject(
             'window-created', (display, win) => {
-                if (isManagedWindow(win))
-                    this._sidebar.queueRebuild();
+                if (!isManagedWindow(win))
+                    return;
+                // Placing before first-frame is pointless: the client sets its
+                // own geometry as it maps and overwrites whatever we did.
+                const actor = win.get_compositor_private();
+                if (actor) {
+                    const id = actor.connect('first-frame', () => {
+                        actor.disconnect(id);
+                        this._sidebar?.relayout(win.get_workspace()?.index());
+                    });
+                }
+                this._sidebar.queueRebuild();
             },
             'notify::focus-window', () => this._sidebar.queueRebuild(),
             'grab-op-end', (display, win, op) => {
-                if (op === Meta.GrabOp.MOVING || op === Meta.GrabOp.KEYBOARD_MOVING)
+                if (!win)
+                    return;
+                if (RESIZE_GRAB_OPS.has(op)) {
+                    // Absorb the drag into the layout instead of snapping the
+                    // window back on the next pass.
+                    this._arranger.absorbResize(win);
+                    return;
+                }
+                if (op === Meta.GrabOp.MOVING_UNCONSTRAINED ||
+                    op === Meta.GrabOp.KEYBOARD_MOVING) {
+                    // A tiled window that was dragged has to go back into its
+                    // slot; the layout, not the pointer, owns its position.
+                    this._sidebar.relayout(win.get_workspace()?.index());
                     this._sidebar.queueRebuild();
+                }
             },
             this);
 
@@ -1082,7 +1320,16 @@ export default class WindowGroupsExtension extends Extension {
             'workspace-added', () => this._sidebar.queueRebuild(),
             'workspace-removed', () => this._sidebar.queueRebuild(),
             'workspaces-reordered', () => this._sidebar.queueRebuild(),
-            'workspace-switched', () => this._sidebar.queueRebuild(),
+            'workspace-switched', (mgr, from, to) => {
+                this._sidebar.relayout(to);
+                this._sidebar.queueRebuild();
+            },
+            this);
+
+        // Struts change the usable rectangle without any window moving, so a
+        // layout computed against the old work area would be stale.
+        global.display.connectObject(
+            'workareas-changed', () => this._sidebar.relayout(),
             this);
 
         // Renaming from the sidebar calls queueRebuild() itself, but the name
@@ -1095,6 +1342,7 @@ export default class WindowGroupsExtension extends Extension {
         Main.layoutManager.connectObject(
             'monitors-changed', () => {
                 this._sidebar.updateGeometry();
+                this._sidebar.relayout();
                 this._sidebar.queueRebuild();
             },
             this);
@@ -1105,7 +1353,13 @@ export default class WindowGroupsExtension extends Extension {
             // from outside (gsettings, a prefs dialog, a second monitor of
             // the same key) would otherwise not be picked up until some
             // unrelated event happened to trigger a rebuild.
-            'changed::arrangements', () => this._sidebar.queueRebuild(),
+            'changed::arrangements', () => {
+                this._sidebar.relayout();
+                this._sidebar.queueRebuild();
+            },
+            'changed::gap', () => this._sidebar.relayout(),
+            'changed::outer-gap', () => this._sidebar.relayout(),
+            'changed::layout-states', () => this._sidebar.relayout(),
             'changed::colors', () => this._sidebar.queueRebuild(),
             'changed::auto-group', () => this._sidebar.queueRebuild(),
             // Struts are fixed at addChrome() time, so flipping auto-hide
@@ -1132,6 +1386,7 @@ export default class WindowGroupsExtension extends Extension {
         this._sidebar = null;
         this._model?.destroy();
         this._model = null;
+        this._arranger?.destroy();
         this._arranger = null;
         this._tags?.destroy();
         this._tags = null;

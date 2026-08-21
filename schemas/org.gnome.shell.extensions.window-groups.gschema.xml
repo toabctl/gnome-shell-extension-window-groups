@@ -22,6 +22,18 @@
       <default>true</default>
       <summary>When a window is tagged, move it into the group named after that tag, creating the group if needed</summary>
     </key>
+    <key name="layout-states" type="as">
+      <default>[]</default>
+      <summary>Per-group layout state as JSON ({ratios, masterRatio}), parallel to workspace index</summary>
+    </key>
+    <key name="gap" type="i">
+      <default>8</default>
+      <summary>Gap between tiled windows, in logical pixels</summary>
+    </key>
+    <key name="outer-gap" type="i">
+      <default>8</default>
+      <summary>Gap between tiled windows and the edge of the work area</summary>
+    </key>
     <key name="colors" type="as">
       <default>[]</default>
       <summary>Per-group colour name, parallel to workspace index</summary>
