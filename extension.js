@@ -143,16 +143,6 @@ class GroupModel {
         return next;
     }
 
-    isCollapsed(index) {
-        return this._settings.get_strv('collapsed')[index] === '1';
-    }
-
-    setCollapsed(index, collapsed) {
-        const values = this._padded(this._settings.get_strv('collapsed'), '0');
-        values[index] = collapsed ? '1' : '0';
-        this._settings.set_strv('collapsed', values);
-    }
-
     windows(index) {
         const ws = this.workspace(index);
         if (!ws)
@@ -211,8 +201,6 @@ class GroupModel {
             v => this._wmPrefs.set_strv('workspace-names', v), '');
         swap(() => this._settings.get_strv('arrangements'),
             v => this._settings.set_strv('arrangements', v), 'free');
-        swap(() => this._settings.get_strv('collapsed'),
-            v => this._settings.set_strv('collapsed', v), '0');
         swap(() => this._settings.get_strv('colors'),
             v => this._settings.set_strv('colors', v), 'none');
     }
@@ -227,8 +215,6 @@ class GroupModel {
             v => this._wmPrefs.set_strv('workspace-names', v), '');
         splice(() => this._settings.get_strv('arrangements'),
             v => this._settings.set_strv('arrangements', v), 'free');
-        splice(() => this._settings.get_strv('collapsed'),
-            v => this._settings.set_strv('collapsed', v), '0');
         splice(() => this._settings.get_strv('colors'),
             v => this._settings.set_strv('colors', v), 'none');
     }
@@ -394,8 +380,6 @@ class GroupSection extends St.BoxLayout {
             this._nameButton.get_child().style = `color: ${color.hex};`;
         }
 
-        this._collapsed = model.isCollapsed(index);
-        this._rowBox.visible = !this._collapsed;
     }
 
     get groupIndex() {
@@ -409,12 +393,6 @@ class GroupSection extends St.BoxLayout {
             x_expand: true,
         });
         this.add_child(header);
-
-        this._expander = iconButton(
-            this._model.isCollapsed(this._index) ? 'pan-end-symbolic' : 'pan-down-symbolic',
-            'Collapse or expand group');
-        this._expander.connect('clicked', () => this._toggleCollapsed());
-        header.add_child(this._expander);
 
         const color = this._model.color(this._index);
         this._colorDot = new St.Button({
@@ -480,11 +458,6 @@ class GroupSection extends St.BoxLayout {
         header.add_child(remove);
 
         this._header = header;
-    }
-
-    _toggleCollapsed() {
-        this._model.setCollapsed(this._index, !this._model.isCollapsed(this._index));
-        this._sidebar.queueRebuild();
     }
 
     _beginRename() {
@@ -743,7 +716,6 @@ export default class WindowGroupsExtension extends Extension {
             // the same key) would otherwise not be picked up until some
             // unrelated event happened to trigger a rebuild.
             'changed::arrangements', () => this._sidebar.queueRebuild(),
-            'changed::collapsed', () => this._sidebar.queueRebuild(),
             'changed::colors', () => this._sidebar.queueRebuild(),
             this);
     }

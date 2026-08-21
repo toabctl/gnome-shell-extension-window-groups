@@ -60,12 +60,16 @@ wait_for_agent() {
 wait_for_session() {
     echo -n "waiting for a graphical session"
     for _ in $(seq 1 90); do
-        if lxc exec "$VM" -- test -S /run/user/1000/bus 2>/dev/null; then
+        # The bus socket alone is not enough: it lingers after a session dies,
+        # which made this return ok while the guest sat at the gdm greeter.
+        # Require a live shell owned by the desktop user as well.
+        if lxc exec "$VM" -- test -S /run/user/1000/bus 2>/dev/null &&
+           lxc exec "$VM" -- pgrep -u 1000 -f "gnome-shell --mode" >/dev/null 2>&1; then
             echo " ok"; return 0
         fi
         echo -n .; sleep 2
     done
-    echo; die "no session bus at /run/user/1000/bus — is the guest logged in?"
+    echo; die "no logged-in graphical session (guest may be at the gdm greeter)"
 }
 
 push_extension() {
@@ -112,9 +116,12 @@ cmd_sync() {
     # Disabling and re-enabling is NOT enough: GJS caches the ES module, so
     # extension.js is only imported once per shell lifetime. Wayland has no
     # shell restart either, so the session itself has to go. Cheap in a VM.
-    echo "restarting the guest session (module cache forces this)"
-    lxc exec "$VM" -- systemctl restart gdm
-    sleep 5
+    # `systemctl restart gdm` is not reliable here — autologin does not always
+    # re-fire and the guest lands on the greeter. A reboot is ~30s and always
+    # comes back to a clean session.
+    echo "rebooting the guest (GJS module cache forces a full restart)"
+    lxc restart "$VM"
+    wait_for_agent
     wait_for_session
     # Autologin re-enables it, but make sure.
     as_user gnome-extensions enable "$UUID" || true
@@ -137,10 +144,15 @@ cmd_shot() {
     # systemctl cannot be used: the gsd units set RefuseManualStart/Stop, so
     # `systemctl --user stop` is rejected. Signal the process instead; the
     # session restarts it on demand and nothing outside this VM is affected.
+    # Delete first: without this a failed capture silently pulls the previous
+    # run's file, which looks like a successful screenshot of stale state.
+    lxc exec "$VM" -- rm -f /tmp/wg-vm-shot.png
     lxc exec "$VM" -- pkill -f gsd-media-keys 2>/dev/null || true
     sleep 1
     as_user python3 "/home/$u/.local/share/gnome-shell/extensions/$UUID/screenshot-helper.py" \
         /tmp/wg-vm-shot.png || true
+    lxc exec "$VM" -- test -s /tmp/wg-vm-shot.png \
+        || die "screenshot failed in the guest (no file produced)"
     lxc file pull "$VM/tmp/wg-vm-shot.png" "$out"
     echo "wrote $out"
 }

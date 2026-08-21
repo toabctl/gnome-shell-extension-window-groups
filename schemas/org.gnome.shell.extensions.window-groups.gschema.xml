@@ -14,9 +14,5 @@
       <default>[]</default>
       <summary>Per-group colour name, parallel to workspace index</summary>
     </key>
-    <key name="collapsed" type="as">
-      <default>[]</default>
-      <summary>Per-group collapsed flag, parallel to workspace index: "0" or "1"</summary>
-    </key>
   </schema>
 </schemalist>
