@@ -103,6 +103,12 @@ While compact, moving the pointer onto the sidebar expands it over the
 windows and it collapses again when the pointer leaves
 (`expand-on-hover`, on by default).
 
+**It only does anything while the sidebar is collapsed.** Hovering an already
+expanded sidebar is a no-op by design, which is easy to mistake for the
+feature being broken. Check with:
+
+    gsettings get org.gnome.shell.extensions.window-groups compact
+
 The expansion deliberately does *not* change the work area. Reserved space and
 visible width are separate actors: an invisible strut actor holds the compact
 width, while the visible sidebar is registered with `affectsStruts: false`. If

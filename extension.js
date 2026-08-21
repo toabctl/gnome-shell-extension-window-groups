@@ -1338,6 +1338,7 @@ class Sidebar {
         this._revealed = !this._autoHide;
         this._hideTimeoutId = 0;
         this._hoverId = 0;
+        this._guardId = 0;
         this._hoverExpanded = false;
 
         // Reserved space and visible width are deliberately different actors.
@@ -1494,6 +1495,10 @@ class Sidebar {
             GLib.source_remove(this._hoverId);
             this._hoverId = 0;
         }
+        if (this._guardId) {
+            GLib.source_remove(this._guardId);
+            this._guardId = 0;
+        }
         this._teardownBarrier();
         DND.removeDragMonitor(this._dragMonitor);
         for (const win of this._trackedWindows)
@@ -1559,11 +1564,39 @@ class Sidebar {
             // The pointer may have left again while we waited.
             if (wanted && !this.actor.has_pointer)
                 return GLib.SOURCE_REMOVE;
-            this._hoverExpanded = wanted;
-            this.updateGeometry();
-            this.rebuild();
+            this._setHoverExpanded(wanted);
             return GLib.SOURCE_REMOVE;
         });
+    }
+
+    _setHoverExpanded(expanded) {
+        this._hoverExpanded = expanded;
+        this.updateGeometry();
+        this.rebuild();
+        if (expanded)
+            this._startHoverGuard();
+    }
+
+    /** A leave-event is not guaranteed. The pointer can be warped away, its
+     *  device can disappear, or the crossing event can be swallowed by a
+     *  grab — and then the sidebar stays expanded over the windows forever.
+     *  Poll cheaply while expanded rather than trusting the event. */
+    _startHoverGuard() {
+        if (this._guardId)
+            return;
+        this._guardId = GLib.timeout_add_seconds(
+            GLib.PRIORITY_DEFAULT_IDLE, 1, () => {
+                if (!this._hoverExpanded || !this.actor) {
+                    this._guardId = 0;
+                    return GLib.SOURCE_REMOVE;
+                }
+                if (!this.actor.has_pointer) {
+                    this._guardId = 0;
+                    this._setHoverExpanded(false);
+                    return GLib.SOURCE_REMOVE;
+                }
+                return GLib.SOURCE_CONTINUE;
+            });
     }
 
     relayout(index) {

@@ -144,14 +144,19 @@ cmd_console() {
     command -v remote-viewer >/dev/null \
         || die "remote-viewer missing. Install with:  sudo apt install virt-viewer"
 
-    if [ -z "${WG_KEEP_VDAGENT:-}" ]; then
-        # spice-vdagent is what re-resizes the guest on every client resize,
-        # undoing the pin below. Stopping it costs host/guest clipboard
-        # sharing, which this test VM does not need.
+    # Killing spice-vdagent keeps the resolution pinned, but it also runs the
+    # guest side of pointer and clipboard integration — losing it is far worse
+    # than a display that resizes. Off by default; opt in with WG_PIN_DISPLAY=1
+    # and use View > Automatically resize in remote-viewer instead.
+    if [ -n "${WG_PIN_DISPLAY:-}" ]; then
         lxc exec "$VM" -- systemctl stop spice-vdagentd.socket 2>/dev/null || true
         lxc exec "$VM" -- systemctl stop spice-vdagentd 2>/dev/null || true
-        echo "stopped spice-vdagentd so the resolution stays put"
-        echo "  (clipboard sharing is off; WG_KEEP_VDAGENT=1 to keep it)"
+        lxc exec "$VM" -- pkill -f "spice-vdagent$" 2>/dev/null || true
+        echo "stopped spice-vdagent: resolution pinned, pointer and clipboard"
+        echo "  integration degraded"
+    else
+        echo "tip: if the desktop is tiny, turn off View > Automatically resize"
+        echo "     in remote-viewer, then run ./run-lxd.sh res 2.0"
     fi
     cmd_res "${WG_SCALE:-2.0}" "${WG_MODE:-3840x2160}"
 
