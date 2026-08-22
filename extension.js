@@ -39,6 +39,9 @@ const HOVER_COLLAPSE_DELAY = 300;
 const EDGE_DWELL = 250;
 const REVEAL_COMMIT = 1500;
 const REVEAL_POLL = 300;
+/** How far open the "door" starts. Past about 80 degrees the panel is edge-on
+ *  and the swing reads as a flicker rather than a rotation. */
+const SWING_ANGLE = 72;
 
 /** Every grab op that means "the user resized this window". */
 const RESIZE_GRAB_OPS = new Set([
@@ -1200,6 +1203,8 @@ class Sidebar {
             trackFullscreen: true,
         });
 
+        this._updateBlur();
+
         this.actor.connect('enter-event', () => {
             this._cancelHide();
             this._queueHoverExpand(true);
@@ -1237,7 +1242,12 @@ class Sidebar {
         if (!this._autoHide) {
             this._cancelHide();
             this._revealed = true;
+            this.actor.remove_all_transitions();
             this.actor.translation_x = 0;
+            this.actor.rotation_angle_y = 0;
+            this.actor.translation_z = 0;
+            this.actor.opacity = 255;
+            this.actor.show();
             return;
         }
 
@@ -1320,17 +1330,38 @@ class Sidebar {
     }
 
 
+    _swings() {
+        return this._settings.get_string('reveal-style') === 'swing';
+    }
+
     _reveal() {
         this._cancelHide();
         if (this._revealed)
             return;
         this._revealed = true;
         this.actor.remove_all_transitions();
-        this.actor.ease({
-            translation_x: 0,
-            duration: SLIDE_DURATION,
-            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-        });
+        this.actor.show();
+
+        if (this._swings()) {
+            // Hinge on the left edge. The stage has a perspective projection,
+            // so rotating about Y genuinely foreshortens — the panel opens
+            // into the scene rather than sliding across a flat plane.
+            this.actor.set_pivot_point(0, 0.5);
+            this.actor.translation_x = 0;
+            this.actor.ease({
+                rotation_angle_y: 0,
+                translation_z: 0,
+                opacity: 255,
+                duration: SLIDE_DURATION * 1.6,
+                mode: Clutter.AnimationMode.EASE_OUT_BACK,
+            });
+        } else {
+            this.actor.ease({
+                translation_x: 0,
+                duration: SLIDE_DURATION,
+                mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+            });
+        }
         this._startRevealGuard();
     }
 
@@ -1387,6 +1418,31 @@ class Sidebar {
         const offscreen =
             -(this.actor.width + this._settings.get_int('sidebar-margin'));
         this.actor.remove_all_transitions();
+
+        if (this._swings()) {
+            this.actor.set_pivot_point(0, 0.5);
+            this.actor.translation_x = 0;
+            if (immediate) {
+                this.actor.rotation_angle_y = -SWING_ANGLE;
+                this.actor.translation_z = -120;
+                this.actor.opacity = 0;
+                this.actor.hide();
+                return;
+            }
+            this.actor.ease({
+                rotation_angle_y: -SWING_ANGLE,
+                translation_z: -120,
+                opacity: 0,
+                duration: SLIDE_DURATION * 1.3,
+                mode: Clutter.AnimationMode.EASE_IN_QUAD,
+                // Hidden rather than merely transparent: a rotated actor still
+                // picks, and an invisible panel eating clicks at the screen
+                // edge is worse than no panel at all.
+                onComplete: () => this.actor?.hide(),
+            });
+            return;
+        }
+
         if (immediate) {
             this.actor.translation_x = offscreen;
             return;
@@ -1474,6 +1530,33 @@ class Sidebar {
             this.relayout(from);
         this.relayout(index);
         this.queueRebuild();
+    }
+
+    /** Frost whatever is behind the sidebar.
+     *
+     *  BACKGROUND mode samples the framebuffer under the actor, so it only
+     *  reads as glass if the background colour is translucent — an opaque
+     *  panel blurs nothing visible. This is the same effect GNOME uses for
+     *  its own popups, and it is what makes an overlay look like it is above
+     *  the windows rather than a hole cut in the layout.
+     */
+    _updateBlur() {
+        const wanted = this._settings.get_boolean('blur');
+        if (!wanted) {
+            if (this._blur) {
+                this.actor.remove_effect(this._blur);
+                this._blur = null;
+            }
+            this.actor.remove_style_class_name('wg-glass');
+            return;
+        }
+        if (!this._blur) {
+            this._blur = new Shell.BlurEffect({mode: Shell.BlurMode.BACKGROUND});
+            this.actor.add_effect(this._blur);
+        }
+        this._blur.radius = Math.max(0, this._settings.get_int('blur-radius'));
+        this._blur.brightness = 0.88;
+        this.actor.add_style_class_name('wg-glass');
     }
 
     /** Compact for rendering purposes. Differs from the setting while the
@@ -1565,7 +1648,7 @@ class Sidebar {
         this.actor.set_size(
             Math.max(1, visible - margin),
             Math.max(1, monitor.height - top - 2 * margin));
-        if (this._autoHide && !this._revealed)
+        if (this._autoHide && !this._revealed && !this._swings())
             this.actor.translation_x = -(visible + margin);
 
         if (this._edge) {
@@ -1864,6 +1947,9 @@ export default class WindowGroupsExtension extends Extension {
             'changed::compact', () => this._reloadSidebar(),
             'changed::compact-width', () => this._sidebar.updateGeometry(),
             'changed::sidebar-margin', () => this._sidebar.updateGeometry(),
+            'changed::blur', () => this._sidebar._updateBlur(),
+            'changed::blur-radius', () => this._sidebar._updateBlur(),
+            'changed::reveal-style', () => this._reloadSidebar(),
             'changed::debug-interface', () => {
                 this._debug?.destroy();
                 this._debug = this._settings.get_boolean('debug-interface')

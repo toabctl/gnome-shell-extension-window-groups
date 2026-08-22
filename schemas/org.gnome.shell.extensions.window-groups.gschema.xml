@@ -20,6 +20,22 @@
       <summary>Export a D-Bus interface for tests to read state and drive the extension</summary>
       <description>Off in normal use. Tests need an oracle that reports what the extension believes, rather than inferring it from pixels.</description>
     </key>
+    <key name="blur" type="b">
+      <default>true</default>
+      <summary>Frost the content behind the sidebar, so it reads as floating above the windows</summary>
+    </key>
+    <key name="blur-radius" type="i">
+      <default>48</default>
+      <summary>Background blur radius</summary>
+    </key>
+    <key name="reveal-style" type="s">
+      <choices>
+        <choice value="swing"/>
+        <choice value="slide"/>
+      </choices>
+      <default>'swing'</default>
+      <summary>How the sidebar appears: swing opens it like a door in perspective, slide moves it in flat</summary>
+    </key>
     <key name="sidebar-margin" type="i">
       <default>6</default>
       <summary>Gap between the sidebar and the screen edges, in logical pixels</summary>

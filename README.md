@@ -125,6 +125,28 @@ merged unrelated work. The last remaining group cannot be dissolved, and
 dissolving `Ungrouped` itself falls back to a neighbour. The decision lives in
 `chooseRehomeTarget()` in model.js and is unit tested.
 
+## Depth
+
+The sidebar is meant to read as floating above the windows rather than as a
+notch cut out of the layout. Three things do that:
+
+- **Frosted glass.** `Shell.BlurEffect` in `BACKGROUND` mode samples the
+  framebuffer beneath the actor — the same effect GNOME uses for its own
+  popups. It only reads as glass if the fill is translucent; an opaque panel
+  blurs nothing visible, so the background is a gradient at ~0.4 alpha and the
+  blur runs at `brightness: 0.88`. Off with `blur`, tuned with `blur-radius`.
+- **A drop shadow**, which falls on whatever window is beside it.
+- **A perspective swing.** `reveal-style` defaults to `swing`: the panel is
+  hinged on its left edge (`pivot_point = (0, 0.5)`) and rotates in from
+  −72° about Y. The stage has a perspective projection, so this genuinely
+  foreshortens — it opens into the scene rather than sliding across a flat
+  plane. Past about 80° it is edge-on and reads as a flicker instead of a
+  rotation, hence 72. `reveal-style = 'slide'` gives the flat move instead.
+
+While hidden the actor is `hide()`n, not merely transparent: a rotated actor
+still picks, and an invisible panel eating clicks at the screen edge is worse
+than no panel.
+
 ## Auto-hide
 
 On by default. The pin button in the sidebar header toggles it — pinned keeps

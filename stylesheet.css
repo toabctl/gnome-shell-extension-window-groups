@@ -5,6 +5,7 @@
     background-color: rgba(0, 0, 0, 0.85);
     border: 1px solid rgba(255, 255, 255, 0.10);
     border-radius: 12px;
+    box-shadow: 0 6px 24px 4px rgba(0, 0, 0, 0.65);
     padding: 6px 0 0 0;
     color: #ffffff;
 }
@@ -261,4 +262,14 @@
 
 .wg-toggle-on {
     background-color: rgba(255, 255, 255, 0.18);
+}
+
+/* With a background blur behind it the fill has to be translucent, or there
+   is nothing for the blur to show through. A brighter top edge and a hairline
+   highlight give the panel a lit face rather than a flat card. */
+.wg-glass {
+    background-gradient-direction: vertical;
+    background-gradient-start: rgba(42, 42, 48, 0.34);
+    background-gradient-end: rgba(14, 14, 18, 0.44);
+    border: 1px solid rgba(255, 255, 255, 0.16);
 }
