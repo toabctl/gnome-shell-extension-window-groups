@@ -40,10 +40,6 @@
       <default>true</default>
       <summary>Slide the sidebar off screen and reveal it by pushing the pointer into the left edge</summary>
     </key>
-    <key name="reveal-pressure" type="i">
-      <default>100</default>
-      <summary>Pointer pressure, in pixels, needed at the left edge before the sidebar reveals</summary>
-    </key>
     <key name="auto-group" type="b">
       <default>true</default>
       <summary>When a window is tagged, move it into the group named after that tag, creating the group if needed</summary>

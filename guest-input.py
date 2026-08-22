@@ -14,6 +14,7 @@ Must run as root. Usage:
     guest-input.py key super+shift+a type "disk" key down key return
     guest-input.py move 20,400 sleep 1        # hover the sidebar
     guest-input.py move 20,400 click left
+    guest-input.py move 0,400 sleep 0.5 rel 200,0   # nudge without re-homing
 """
 import ctypes
 import fcntl
@@ -186,6 +187,12 @@ def main():
             elif verb == "move":
                 x, y = args[i + 1].split(",")
                 kb.move_to(int(x), int(y))
+            elif verb == "rel":
+                # No fling to the corner first, so a nudge stays a nudge.
+                # move_to costs ~0.75s, which is long enough to expire
+                # timeouts the thing under test is meant to be measuring.
+                dx, dy = args[i + 1].split(",")
+                kb.move_rel(int(dx), int(dy))
             elif verb == "click":
                 kb.click(args[i + 1])
             elif verb == "sleep":

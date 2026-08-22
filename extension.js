@@ -19,7 +19,6 @@ import St from 'gi://St';
 
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as DND from 'resource:///org/gnome/shell/ui/dnd.js';
-import * as Layout from 'resource:///org/gnome/shell/ui/layout.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import {computeLayout, resizeToState} from './layouts.js';
@@ -32,13 +31,14 @@ import {
 
 const ICON_SIZE = 18;
 const COMPACT_ICON_SIZE = 24;
-const REVEAL_TIMEOUT = 1000;
 const SLIDE_DURATION = 200;
 const HIDE_DELAY = 400;
 const TOOLTIP_DELAY = 450;
 const HOVER_EXPAND_DELAY = 180;
 const HOVER_COLLAPSE_DELAY = 300;
 const EDGE_DWELL = 250;
+const REVEAL_COMMIT = 1500;
+const REVEAL_POLL = 300;
 
 /** Every grab op that means "the user resized this window". */
 const RESIZE_GRAB_OPS = new Set([
@@ -1108,6 +1108,10 @@ class Sidebar {
             orientation: Clutter.Orientation.VERTICAL,
             style_class: 'wg-sidebar',
             reactive: true,
+            // St keeps `hover` up to date itself. Clutter's has_pointer reads
+            // false on this actor even with the pointer plainly inside it,
+            // which silently broke every check that relied on it.
+            track_hover: true,
         });
 
         this._compact = this._settings.get_boolean('compact');
@@ -1178,6 +1182,7 @@ class Sidebar {
         this._hoverId = 0;
         this._guardId = 0;
         this._edgeDwellId = 0;
+        this._revealGuardId = 0;
         this._hoverExpanded = false;
 
         // Reserved space and visible width are deliberately different actors.
@@ -1236,20 +1241,14 @@ class Sidebar {
             return;
         }
 
-        this._buildBarrier();
         this._buildEdgeStrip();
         this._hide(true);
     }
 
     /** A thin reactive strip along the screen edge, revealing after a short
-     *  dwell.
-     *
-     *  The pressure barrier alone is not enough. Pressure accumulates from
-     *  *blocked relative motion*, and an absolute pointing device — a tablet,
-     *  a touchscreen, anything behind SPICE or VNC — reports a position
-     *  rather than a delta, so it can never build any. On those the barrier
-     *  silently never fires. The dwell keeps a brush past the edge from
-     *  triggering a reveal.
+     *  dwell. The only reveal trigger; see _teardownBarrier for why the
+     *  Meta.Barrier that used to accompany it was removed. The dwell keeps a
+     *  brush past the edge from triggering a reveal.
      */
     _buildEdgeStrip() {
         const monitor = Main.layoutManager.primaryMonitor;
@@ -1257,9 +1256,14 @@ class Sidebar {
             return;
         const top = Main.layoutManager.panelBox.height;
 
-        this._edge = new St.Widget({reactive: true, style_class: 'wg-edge'});
+        // As wide as the margin, so it abuts the sidebar rather than leaving
+        // a dead strip between them — and never overlaps it, since the strip
+        // sits above the sidebar and would swallow its enter events.
+        const margin = Math.max(2, this._settings.get_int('sidebar-margin'));
+        this._edge = new St.Widget({
+            reactive: true, track_hover: true, style_class: 'wg-edge'});
         this._edge.set_position(monitor.x, monitor.y + top);
-        this._edge.set_size(2, monitor.height - top);
+        this._edge.set_size(margin, monitor.height - top);
         Main.layoutManager.addChrome(this._edge, {
             affectsStruts: false,
             trackFullscreen: true,
@@ -1271,7 +1275,8 @@ class Sidebar {
             this._edgeDwellId = GLib.timeout_add(
                 GLib.PRIORITY_DEFAULT, EDGE_DWELL, () => {
                     this._edgeDwellId = 0;
-                    if (this._edge?.has_pointer)
+        this._revealGuardId = 0;
+                    if (this._edge?.hover)
                         this._reveal();
                     return GLib.SOURCE_REMOVE;
                 });
@@ -1281,6 +1286,7 @@ class Sidebar {
             if (this._edgeDwellId) {
                 GLib.source_remove(this._edgeDwellId);
                 this._edgeDwellId = 0;
+        this._revealGuardId = 0;
             }
             return Clutter.EVENT_PROPAGATE;
         });
@@ -1290,6 +1296,7 @@ class Sidebar {
         if (this._edgeDwellId) {
             GLib.source_remove(this._edgeDwellId);
             this._edgeDwellId = 0;
+        this._revealGuardId = 0;
         }
         if (this._edge) {
             Main.layoutManager.removeChrome(this._edge);
@@ -1298,48 +1305,20 @@ class Sidebar {
         }
     }
 
-    _buildBarrier() {
-        const monitor = Main.layoutManager.primaryMonitor;
-        if (!monitor)
-            return;
-        const top = Main.layoutManager.panelBox.height;
-
-        // A pressure barrier rather than a plain reactive strip: the same
-        // mechanism the hot corner uses, so brushing past the edge while
-        // aiming at a window does not fling the sidebar open.
-        this._barrier = new Meta.Barrier({
-            backend: global.backend,
-            x1: monitor.x, x2: monitor.x,
-            y1: monitor.y + top, y2: monitor.y + monitor.height,
-            // NEGATIVE_X, not POSITIVE_X: the barrier must block motion that
-            // would carry the pointer left past the screen edge, which is
-            // what accumulates pressure. POSITIVE_X blocks motion out of the
-            // edge — something the pointer can never do from x = 0 — so the
-            // barrier simply never fired. GNOME's own hot corner uses
-            // NEGATIVE_X for exactly this reason.
-            directions: Meta.BarrierDirection.NEGATIVE_X,
-        });
-        this._pressureBarrier = new Layout.PressureBarrier(
-            this._settings.get_int('reveal-pressure'),
-            REVEAL_TIMEOUT,
-            Shell.ActionMode.NORMAL);
-        this._pressureBarrier.addBarrier(this._barrier);
-        this._pressureBarrier.connect('trigger', () => this._reveal());
-    }
-
+    /** The barrier that used to live here is gone. It never worked for
+     *  absolute pointing devices — pressure accumulates from blocked
+     *  *relative* motion, so a tablet or anything behind SPICE or VNC can
+     *  never build any — and worse, spanning the whole screen edge it
+     *  physically trapped the pointer: with the barrier in place a synthetic
+     *  600px move right left the pointer at x = 0, and removing it let the
+     *  same move through. GNOME's own hot corner barrier is corner-sized
+     *  rather than full-height for exactly this reason. The reactive edge
+     *  strip blocks nothing and works for both kinds of pointer.
+     */
     _teardownBarrier() {
         this._teardownEdgeStrip();
-        if (this._pressureBarrier) {
-            if (this._barrier)
-                this._pressureBarrier.removeBarrier(this._barrier);
-            this._pressureBarrier.destroy();
-            this._pressureBarrier = null;
-        }
-        if (this._barrier) {
-            this._barrier.destroy();
-            this._barrier = null;
-        }
     }
+
 
     _reveal() {
         this._cancelHide();
@@ -1352,10 +1331,57 @@ class Sidebar {
             duration: SLIDE_DURATION,
             mode: Clutter.AnimationMode.EASE_OUT_QUAD,
         });
+        this._startRevealGuard();
+    }
+
+    /** A reveal is provisional until the pointer actually arrives.
+     *
+     *  Hiding used to depend entirely on a leave-event from the sidebar, and
+     *  a pointer resting at the very screen edge never enters it — the strip
+     *  would reveal the sidebar and nothing would ever put it away. A pointer
+     *  parked in the corner, which is where it often sits after connecting,
+     *  left it covering the windows indefinitely.
+     */
+    _startRevealGuard() {
+        this._stopRevealGuard();
+        this._reachedSidebar = false;
+        this._revealedAt = GLib.get_monotonic_time();
+        this._revealGuardId = GLib.timeout_add(
+            GLib.PRIORITY_DEFAULT, REVEAL_POLL, () => {
+                if (!this._revealed || !this.actor) {
+                    this._revealGuardId = 0;
+                    return GLib.SOURCE_REMOVE;
+                }
+                if (this.actor.hover) {
+                    this._reachedSidebar = true;
+                    return GLib.SOURCE_CONTINUE;
+                }
+                if (this._reachedSidebar) {
+                    this._revealGuardId = 0;
+                    this._queueHide();
+                    return GLib.SOURCE_REMOVE;
+                }
+                const elapsed =
+                    (GLib.get_monotonic_time() - this._revealedAt) / 1000;
+                if (elapsed > REVEAL_COMMIT) {
+                    this._revealGuardId = 0;
+                    this._hide();
+                    return GLib.SOURCE_REMOVE;
+                }
+                return GLib.SOURCE_CONTINUE;
+            });
+    }
+
+    _stopRevealGuard() {
+        if (this._revealGuardId) {
+            GLib.source_remove(this._revealGuardId);
+            this._revealGuardId = 0;
+        }
     }
 
     _hide(immediate = false) {
         this._cancelHide();
+        this._stopRevealGuard();
         this._revealed = false;
         // Include the margin, or a sliver of the panel stays on screen.
         const offscreen =
@@ -1378,7 +1404,7 @@ class Sidebar {
             GLib.PRIORITY_DEFAULT, HIDE_DELAY, () => {
                 this._hideTimeoutId = 0;
                 // Do not slide out from under a pointer that came back.
-                if (!this.actor.has_pointer)
+                if (!this.actor.hover)
                     this._hide();
                 return GLib.SOURCE_REMOVE;
             });
@@ -1405,6 +1431,7 @@ class Sidebar {
             GLib.source_remove(this._guardId);
             this._guardId = 0;
         }
+        this._stopRevealGuard();
         this._teardownBarrier();
         DND.removeDragMonitor(this._dragMonitor);
         for (const win of this._trackedWindows)
@@ -1468,7 +1495,7 @@ class Sidebar {
         this._hoverId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
             this._hoverId = 0;
             // The pointer may have left again while we waited.
-            if (wanted && !this.actor.has_pointer)
+            if (wanted && !this.actor.hover)
                 return GLib.SOURCE_REMOVE;
             this._setHoverExpanded(wanted);
             return GLib.SOURCE_REMOVE;
@@ -1496,7 +1523,7 @@ class Sidebar {
                     this._guardId = 0;
                     return GLib.SOURCE_REMOVE;
                 }
-                if (!this.actor.has_pointer) {
+                if (!this.actor.hover) {
                     this._guardId = 0;
                     this._setHoverExpanded(false);
                     return GLib.SOURCE_REMOVE;
@@ -1543,7 +1570,7 @@ class Sidebar {
 
         if (this._edge) {
             this._edge.set_position(monitor.x, monitor.y + top);
-            this._edge.set_size(2, monitor.height - top);
+            this._edge.set_size(Math.max(2, margin), monitor.height - top);
         }
     }
 
@@ -1673,7 +1700,11 @@ class DebugInterface {
                 })),
             });
         }
+        // Pointer position is in physical pixels while actor geometry is
+        // logical; do not compare them without scaling.
+        const [px, py] = global.get_pointer();
         return JSON.stringify({
+            pointer: {x: px, y: py},
             groups,
             activeGroup: this._model.activeIndex,
             sidebar: {
@@ -1682,6 +1713,9 @@ class DebugInterface {
                 autoHide: this._sidebar?._autoHide ?? false,
                 revealed: this._sidebar?._revealed ?? true,
                 edgeStrip: !!this._sidebar?._edge,
+                edgeWidth: this._sidebar?._edge?.width ?? 0,
+                pointerOnSidebar: this._sidebar?.actor?.hover ?? false,
+                pointerOnEdge: this._sidebar?._edge?.hover ?? false,
                 // The flag is set before the animation runs; report the actual
                 // actor geometry too, or a test can pass while nothing moved.
                 translationX: this._sidebar?.actor?.translation_x ?? 0,
@@ -1853,7 +1887,6 @@ export default class WindowGroupsExtension extends Extension {
             // Struts are fixed at addChrome() time, so flipping auto-hide
             // has to re-register the actor, not just move it.
             'changed::auto-hide', () => this._reloadSidebar(),
-            'changed::reveal-pressure', () => this._reloadSidebar(),
             this);
     }
 

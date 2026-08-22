@@ -137,19 +137,29 @@ left edge. Reveal uses a `Meta.Barrier` driven by `Layout.PressureBarrier` —
 the same mechanism as the hot corner — so brushing past the edge on the way
 to a window does not fling it open.
 
-Reveal has two triggers, because one is not enough. A pressure barrier
-accumulates *blocked relative motion*, so an absolute pointing device — a
-tablet, a touchscreen, or anything behind SPICE or VNC — can never build any
-pressure and the barrier silently never fires. Alongside it there is a 2px
-reactive strip at the screen edge that reveals after a 250 ms dwell, which
-works for both kinds of pointer. The dwell is what stops a brush past the
+Reveal is a reactive strip along the screen edge, as wide as the margin,
+which reveals after a 250 ms dwell. The dwell is what stops a brush past the
 edge from triggering it.
 
-The barrier direction is `NEGATIVE_X`. It has to block motion that would carry
-the pointer *left past* the screen edge, because that is what accumulates
-pressure. `POSITIVE_X` blocks motion out of the edge, which the pointer can
-never make from x = 0, so the barrier never fires at all — GNOME's own hot
-corner uses `NEGATIVE_X` for the same reason. Tune the shove needed with
+A `Meta.Barrier` was tried first and removed for two independent reasons.
+Pressure accumulates from blocked *relative* motion, so an absolute pointing
+device — a tablet, a touchscreen, anything behind SPICE or VNC — can never
+build any and the barrier never fires. Worse, a barrier spanning the whole
+edge physically traps the pointer against it: with one in place a synthetic
+600 px move right left the pointer at x = 0, and removing it let the same move
+through. GNOME's own hot corner barrier is corner-sized rather than
+full-height for exactly this reason.
+
+A reveal is **provisional**. The pointer has to actually arrive on the sidebar
+within 1.5 s or it hides again. Hiding used to depend entirely on a
+leave-event from the sidebar, and a pointer resting at the very screen edge
+never enters it — so the strip would reveal the sidebar and nothing would ever
+put it away.
+
+Hover detection uses St's `hover` property with `track_hover`, not Clutter's
+`has_pointer`. `has_pointer` reads false on these actors even with the pointer
+plainly inside them, which silently broke the reveal guard, the hover-expand
+guard and the hide recheck all at once. Tune the shove needed with
 `reveal-pressure` (pixels, default 100). It hides again shortly after the
 pointer leaves.
 
