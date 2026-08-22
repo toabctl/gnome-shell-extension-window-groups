@@ -289,7 +289,9 @@ cmd_demo() {
 demo_needed() {
     local app
     for app in ${DEMO_APPS[0]} ${DEMO_APPS[1]} ${DEMO_APPS[2]}; do
-        lxc exec "$VM" -- pgrep -u 1000 -x "$app" >/dev/null 2>&1 && return 1
+        # -x matches against comm, which the kernel truncates to 15
+        # characters, so it can never match gnome-text-editor and friends.
+        lxc exec "$VM" -- pgrep -u 1000 -f "(^|/)$app( |\$)" >/dev/null 2>&1 && return 1
     done
     return 0
 }
