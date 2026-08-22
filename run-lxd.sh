@@ -107,6 +107,8 @@ cmd_up() {
     fi
     wait_for_agent
     wait_for_session
+    quiesce_session
+    unlock_session
     push_extension
     enable_extension
     echo
@@ -126,6 +128,7 @@ cmd_sync() {
     lxc restart "$VM"
     wait_for_agent
     wait_for_session
+    quiesce_session
     # Autologin re-enables it, but make sure.
     as_user gnome-extensions enable "$UUID" || true
     sleep 3
@@ -167,15 +170,51 @@ wg_dbus() {
         --method "org.gnome.Shell.Extensions.WindowGroups.$method" "$@" 2>/dev/null
 }
 
+# On the lock screen GNOME runs in unlock-dialog mode, where user extensions
+# are INACTIVE — so everything here silently stops working until it is
+# unlocked. Idle locking is disabled at setup, but a VM resumed from an old
+# state can still come back locked.
+unlock_session() {
+    as_user gdbus call --session --dest org.gnome.ScreenSaver \
+        --object-path /org/gnome/ScreenSaver \
+        --method org.gnome.ScreenSaver.SetActive false >/dev/null 2>&1 || true
+}
+
+session_locked() {
+    as_user gdbus call --session --dest org.gnome.ScreenSaver \
+        --object-path /org/gnome/ScreenSaver \
+        --method org.gnome.ScreenSaver.GetActive 2>/dev/null | grep -q true
+}
+
 enable_debug_iface() {
     local u; u="$(guest_user)"
+    if session_locked; then
+        echo "  guest was locked; unlocking (extensions do not run on the"
+        echo "  lock screen)"
+        unlock_session
+        sleep 2
+    fi
     as_user env GSETTINGS_SCHEMA_DIR="/home/$u/.local/share/gnome-shell/extensions/$UUID/schemas" \
         gsettings set org.gnome.shell.extensions.window-groups debug-interface true
     for _ in $(seq 1 20); do
         wg_dbus GetState >/dev/null 2>&1 && return 0
         sleep 0.5
     done
-    die "the debug D-Bus interface never appeared"
+    echo "extension state: $(as_user gnome-extensions info "$UUID" | grep -i state)" >&2
+    die "the debug interface never appeared. If the state above is INACTIVE the\
+ guest is probably locked or at the greeter, where user extensions do not run."
+}
+
+# A test VM should never blank, lock or suspend: all three make the extension
+# INACTIVE and every check here fail in a way that looks like a code bug.
+quiesce_session() {
+    as_user gsettings set org.gnome.desktop.screensaver lock-enabled false
+    as_user gsettings set org.gnome.desktop.screensaver idle-activation-enabled false
+    as_user gsettings set org.gnome.desktop.session idle-delay 0
+    as_user gsettings set org.gnome.settings-daemon.plugins.power \
+        sleep-inactive-ac-type nothing
+    as_user gsettings set org.gnome.settings-daemon.plugins.power \
+        sleep-inactive-battery-type nothing
 }
 
 cmd_state() {
@@ -258,6 +297,9 @@ demo_needed() {
 cmd_console() {
     command -v remote-viewer >/dev/null \
         || die "remote-viewer missing. Install with:  sudo apt install virt-viewer"
+
+    quiesce_session
+    unlock_session
 
     # Killing spice-vdagent keeps the resolution pinned, but it also runs the
     # guest side of pointer and clipboard integration — losing it is far worse

@@ -378,3 +378,15 @@ happens" while being debugged:
 
 `spice-vdagentd` must be stopped first: its absolute tablet keeps asserting a
 position and overrides relative motion.
+
+### If everything suddenly stops working
+
+Check whether the guest locked. On the lock screen GNOME runs in
+`unlock-dialog` session mode and user extensions are **INACTIVE** — the
+sidebar disappears, the debug interface unexports, and every check fails in a
+way that looks like a code bug. `gnome-extensions info` reports
+`Enabled: Yes` and `State: INACTIVE` together, which is the giveaway.
+
+`run-lxd.sh` disables idle blanking, locking and suspend at setup and unlocks
+before `demo` and `console`, but a VM resumed from an older state can still
+come back locked.
