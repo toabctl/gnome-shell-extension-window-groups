@@ -37,7 +37,7 @@
       <summary>Sidebar width in compact mode, in logical pixels</summary>
     </key>
     <key name="auto-hide" type="b">
-      <default>false</default>
+      <default>true</default>
       <summary>Slide the sidebar off screen and reveal it by pushing the pointer into the left edge</summary>
     </key>
     <key name="reveal-pressure" type="i">

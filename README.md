@@ -127,7 +127,10 @@ dissolving `Ungrouped` itself falls back to a neighbour. The decision lives in
 
 ## Auto-hide
 
-    gsettings set org.gnome.shell.extensions.window-groups auto-hide true
+On by default. The pin button in the sidebar header toggles it — pinned keeps
+the sidebar on screen, unpinned hides it until you reach for it. There is also
+`auto-hide` in gsettings, but reaching for dconf to find a headline feature is
+not a design.
 
 The sidebar slides off screen and reveals when you push the pointer into the
 left edge. Reveal uses a `Meta.Barrier` driven by `Layout.PressureBarrier` —

@@ -1130,6 +1130,21 @@ class Sidebar {
         this._searchButton.connect('clicked', () => this.search?.toggle());
         toggleRow.add_child(this._searchButton);
 
+        // Auto-hide had no affordance at all and could only be reached
+        // through dconf, which is a poor way to discover a headline feature.
+        const pinned = !this._settings.get_boolean('auto-hide');
+        this._pinButton = iconButton(
+            pinned ? 'view-pin-symbolic' : 'sidebar-hide-symbolic',
+            pinned
+                ? 'Pinned — click to hide the sidebar until you reach for it'
+                : 'Auto-hiding — click to keep the sidebar on screen',
+            'wg-icon-button wg-toggle');
+        if (!pinned)
+            this._pinButton.add_style_class_name('wg-toggle-on');
+        this._pinButton.connect('clicked',
+            () => this._settings.set_boolean('auto-hide', pinned));
+        toggleRow.add_child(this._pinButton);
+
         this.actor.add_child(toggleRow);
 
         this._scroll = new St.ScrollView({
