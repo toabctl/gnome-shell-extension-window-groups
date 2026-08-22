@@ -38,6 +38,7 @@ const HIDE_DELAY = 400;
 const TOOLTIP_DELAY = 450;
 const HOVER_EXPAND_DELAY = 180;
 const HOVER_COLLAPSE_DELAY = 300;
+const EDGE_DWELL = 250;
 
 /** Every grab op that means "the user resized this window". */
 const RESIZE_GRAB_OPS = new Set([
@@ -1161,6 +1162,7 @@ class Sidebar {
         this._hideTimeoutId = 0;
         this._hoverId = 0;
         this._guardId = 0;
+        this._edgeDwellId = 0;
         this._hoverExpanded = false;
 
         // Reserved space and visible width are deliberately different actors.
@@ -1220,7 +1222,65 @@ class Sidebar {
         }
 
         this._buildBarrier();
+        this._buildEdgeStrip();
         this._hide(true);
+    }
+
+    /** A thin reactive strip along the screen edge, revealing after a short
+     *  dwell.
+     *
+     *  The pressure barrier alone is not enough. Pressure accumulates from
+     *  *blocked relative motion*, and an absolute pointing device — a tablet,
+     *  a touchscreen, anything behind SPICE or VNC — reports a position
+     *  rather than a delta, so it can never build any. On those the barrier
+     *  silently never fires. The dwell keeps a brush past the edge from
+     *  triggering a reveal.
+     */
+    _buildEdgeStrip() {
+        const monitor = Main.layoutManager.primaryMonitor;
+        if (!monitor)
+            return;
+        const top = Main.layoutManager.panelBox.height;
+
+        this._edge = new St.Widget({reactive: true, style_class: 'wg-edge'});
+        this._edge.set_position(monitor.x, monitor.y + top);
+        this._edge.set_size(2, monitor.height - top);
+        Main.layoutManager.addChrome(this._edge, {
+            affectsStruts: false,
+            trackFullscreen: true,
+        });
+
+        this._edge.connect('enter-event', () => {
+            if (this._edgeDwellId)
+                GLib.source_remove(this._edgeDwellId);
+            this._edgeDwellId = GLib.timeout_add(
+                GLib.PRIORITY_DEFAULT, EDGE_DWELL, () => {
+                    this._edgeDwellId = 0;
+                    if (this._edge?.has_pointer)
+                        this._reveal();
+                    return GLib.SOURCE_REMOVE;
+                });
+            return Clutter.EVENT_PROPAGATE;
+        });
+        this._edge.connect('leave-event', () => {
+            if (this._edgeDwellId) {
+                GLib.source_remove(this._edgeDwellId);
+                this._edgeDwellId = 0;
+            }
+            return Clutter.EVENT_PROPAGATE;
+        });
+    }
+
+    _teardownEdgeStrip() {
+        if (this._edgeDwellId) {
+            GLib.source_remove(this._edgeDwellId);
+            this._edgeDwellId = 0;
+        }
+        if (this._edge) {
+            Main.layoutManager.removeChrome(this._edge);
+            this._edge.destroy();
+            this._edge = null;
+        }
     }
 
     _buildBarrier() {
@@ -1253,6 +1313,7 @@ class Sidebar {
     }
 
     _teardownBarrier() {
+        this._teardownEdgeStrip();
         if (this._pressureBarrier) {
             if (this._barrier)
                 this._pressureBarrier.removeBarrier(this._barrier);
@@ -1464,6 +1525,11 @@ class Sidebar {
             Math.max(1, monitor.height - top - 2 * margin));
         if (this._autoHide && !this._revealed)
             this.actor.translation_x = -(visible + margin);
+
+        if (this._edge) {
+            this._edge.set_position(monitor.x, monitor.y + top);
+            this._edge.set_size(2, monitor.height - top);
+        }
     }
 
     queueRebuild() {
@@ -1600,6 +1666,14 @@ class DebugInterface {
                 compact: this._sidebar?._effectiveCompact?.() ?? false,
                 autoHide: this._sidebar?._autoHide ?? false,
                 revealed: this._sidebar?._revealed ?? true,
+                edgeStrip: !!this._sidebar?._edge,
+                // The flag is set before the animation runs; report the actual
+                // actor geometry too, or a test can pass while nothing moved.
+                translationX: this._sidebar?.actor?.translation_x ?? 0,
+                x: this._sidebar?.actor?.x ?? 0,
+                onScreen: (this._sidebar?.actor?.x ?? 0) +
+                    (this._sidebar?.actor?.translation_x ?? 0) +
+                    (this._sidebar?.actor?.width ?? 0) > 0,
                 hoverExpanded: this._sidebar?._hoverExpanded ?? false,
             },
         });

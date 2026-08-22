@@ -134,6 +134,14 @@ left edge. Reveal uses a `Meta.Barrier` driven by `Layout.PressureBarrier` —
 the same mechanism as the hot corner — so brushing past the edge on the way
 to a window does not fling it open.
 
+Reveal has two triggers, because one is not enough. A pressure barrier
+accumulates *blocked relative motion*, so an absolute pointing device — a
+tablet, a touchscreen, or anything behind SPICE or VNC — can never build any
+pressure and the barrier silently never fires. Alongside it there is a 2px
+reactive strip at the screen edge that reveals after a 250 ms dwell, which
+works for both kinds of pointer. The dwell is what stops a brush past the
+edge from triggering it.
+
 The barrier direction is `NEGATIVE_X`. It has to block motion that would carry
 the pointer *left past* the screen edge, because that is what accumulates
 pressure. `POSITIVE_X` blocks motion out of the edge, which the pointer can
