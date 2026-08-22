@@ -257,13 +257,4 @@
     color: rgba(255, 255, 255, 0.5);
 }
 
-.wg-confirm-title {
-    font-weight: bold;
-    font-size: 1.1em;
-    padding-bottom: 6px;
-}
 
-.wg-confirm-body {
-    color: rgba(255, 255, 255, 0.7);
-    max-width: 24em;
-}

@@ -21,13 +21,13 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as DND from 'resource:///org/gnome/shell/ui/dnd.js';
 import * as Layout from 'resource:///org/gnome/shell/ui/layout.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
-import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
 
 import {computeLayout, resizeToState} from './layouts.js';
 import {rankWindows} from './search.js';
 import {Arranger} from './arranger.js';
 import {
     padArray, moveItem, removeItem, indexOfName, chooseGroupSlot, contrastOn,
+    chooseRehomeTarget, UNGROUPED,
 } from './model.js';
 
 const ICON_SIZE = 18;
@@ -251,27 +251,28 @@ class GroupModel {
     }
 
     /** Remove a group, rehoming its windows into the group above it. */
+    /** Dissolve a group. Its windows are not closed — they move out of any
+     *  group, into a fallback created on demand. Dropping them into whichever
+     *  group happened to be adjacent silently merged unrelated work. */
     removeGroup(index) {
-        if (this.count <= 1)
+        const names = Array.from({length: this.count}, (_, i) => this.rawName(i));
+        const {action, index: existing} = chooseRehomeTarget({names, removing: index});
+        if (action === 'refuse')
             return;
-        const target = index === 0 ? 1 : index - 1;
+
+        let target = existing;
+        if (action === 'create') {
+            target = this.ensureGroupNamed(UNGROUPED, MAX_AUTO_GROUPS);
+            if (target === -1)
+                return;
+        }
+
         for (const win of this.windows(index))
             win.change_workspace_by_index(target, false);
 
         this._spliceParallel(index);
         global.workspace_manager.remove_workspace(
             this.workspace(index), global.get_current_time());
-    }
-
-    /** Close every window in a group, then remove it. Destructive; callers
-     *  must confirm first. */
-    closeGroup(index) {
-        const time = global.get_current_time();
-        for (const win of this.windows(index))
-            win.delete(time);
-        // The windows go away asynchronously, so the group cannot be removed
-        // here — removeGroup() would rehome windows that are still closing.
-        // The caller removes it once they are gone.
     }
 
     /** Move a group to an arbitrary position. reorder_workspace() has move
@@ -681,7 +682,7 @@ class GroupSection extends St.BoxLayout {
 
         const remove = iconButton('window-close-symbolic',
             'Delete this group (its windows move to the group above)');
-        remove.connect('clicked', () => this._confirmRemove());
+        remove.connect('clicked', () => this._model.removeGroup(this._index));
         remove.reactive = this._model.count > 1;
         remove.get_child().style = `color: ${ink};`;
         header.add_child(remove);
@@ -746,59 +747,6 @@ class GroupSection extends St.BoxLayout {
 
     getDragActorSource() {
         return this._header;
-    }
-
-    /** Chrome's group close button closes the tabs. Closing several windows
-     *  at once on one click is worth a question, so an empty group goes
-     *  immediately and anything else asks — and offers the non-destructive
-     *  option too, since until now this button only ungrouped. */
-    _confirmRemove() {
-        const count = this._model.windows(this._index).length;
-        const name = this._model.name(this._index);
-
-        if (count === 0) {
-            this._model.removeGroup(this._index);
-            return;
-        }
-
-        const dialog = new ModalDialog.ModalDialog({destroyOnClose: true});
-        dialog.contentLayout.add_child(new St.Label({
-            style_class: 'wg-confirm-title',
-            text: count === 1
-                ? `Close 1 window in “${name}”?`
-                : `Close ${count} windows in “${name}”?`,
-        }));
-        dialog.contentLayout.add_child(new St.Label({
-            style_class: 'wg-confirm-body',
-            text: count === 1
-                ? 'The window will be asked to close. Unsaved work may be lost.'
-                : `All ${count} windows will be asked to close. ` +
-                  'Unsaved work may be lost.',
-        }));
-
-        dialog.setButtons([
-            {
-                label: 'Cancel',
-                key: Clutter.KEY_Escape,
-                isDefault: true,
-                action: () => dialog.close(),
-            },
-            {
-                label: 'Keep windows, remove group',
-                action: () => {
-                    dialog.close();
-                    this._model.removeGroup(this._index);
-                },
-            },
-            {
-                label: count === 1 ? 'Close window' : `Close ${count} windows`,
-                action: () => {
-                    dialog.close();
-                    this._model.closeGroup(this._index);
-                },
-            },
-        ]);
-        dialog.open();
     }
 
     _beginRename() {
@@ -1288,7 +1236,13 @@ class Sidebar {
             backend: global.backend,
             x1: monitor.x, x2: monitor.x,
             y1: monitor.y + top, y2: monitor.y + monitor.height,
-            directions: Meta.BarrierDirection.POSITIVE_X,
+            // NEGATIVE_X, not POSITIVE_X: the barrier must block motion that
+            // would carry the pointer left past the screen edge, which is
+            // what accumulates pressure. POSITIVE_X blocks motion out of the
+            // edge — something the pointer can never do from x = 0 — so the
+            // barrier simply never fired. GNOME's own hot corner uses
+            // NEGATIVE_X for exactly this reason.
+            directions: Meta.BarrierDirection.NEGATIVE_X,
         });
         this._pressureBarrier = new Layout.PressureBarrier(
             this._settings.get_int('reveal-pressure'),
@@ -1585,6 +1539,9 @@ const DEBUG_IFACE = `
     <method name="ActivateGroup">
       <arg type="u" direction="in" name="index"/>
     </method>
+    <method name="RemoveGroup">
+      <arg type="u" direction="in" name="index"/>
+    </method>
     <method name="SetArrangement">
       <arg type="u" direction="in" name="index"/>
       <arg type="s" direction="in" name="arrangement"/>
@@ -1641,12 +1598,19 @@ class DebugInterface {
             sidebar: {
                 width: this._sidebar?.actor?.width ?? 0,
                 compact: this._sidebar?._effectiveCompact?.() ?? false,
+                autoHide: this._sidebar?._autoHide ?? false,
+                revealed: this._sidebar?._revealed ?? true,
+                hoverExpanded: this._sidebar?._hoverExpanded ?? false,
             },
         });
     }
 
     ActivateGroup(index) {
         this._model.workspace(index)?.activate(global.get_current_time());
+    }
+
+    RemoveGroup(index) {
+        this._model.removeGroup(index);
     }
 
     SetArrangement(index, arrangement) {

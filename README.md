@@ -117,15 +117,13 @@ brushed the edge.
 
 ## Closing a group
 
-The × on a group header asks first when the group has windows, because
-Chrome's equivalent closes the tabs and doing that to several windows on one
-click deserves a question. The dialog offers both outcomes:
+The × dissolves the group. Nothing is closed: its windows move out of any
+group, into an `Ungrouped` group created on demand.
 
-- **Keep windows, remove group** — the old behaviour: windows move to the
-  neighbouring group and only the group disappears.
-- **Close N windows** — asks each window to close, as Chrome does.
-
-An empty group is removed immediately, with no dialog.
+They used to land in whichever group happened to be adjacent, which silently
+merged unrelated work. The last remaining group cannot be dissolved, and
+dissolving `Ungrouped` itself falls back to a neighbour. The decision lives in
+`chooseRehomeTarget()` in model.js and is unit tested.
 
 ## Auto-hide
 
@@ -134,7 +132,13 @@ An empty group is removed immediately, with no dialog.
 The sidebar slides off screen and reveals when you push the pointer into the
 left edge. Reveal uses a `Meta.Barrier` driven by `Layout.PressureBarrier` —
 the same mechanism as the hot corner — so brushing past the edge on the way
-to a window does not fling it open. Tune the shove needed with
+to a window does not fling it open.
+
+The barrier direction is `NEGATIVE_X`. It has to block motion that would carry
+the pointer *left past* the screen edge, because that is what accumulates
+pressure. `POSITIVE_X` blocks motion out of the edge, which the pointer can
+never make from x = 0, so the barrier never fires at all — GNOME's own hot
+corner uses `NEGATIVE_X` for the same reason. Tune the shove needed with
 `reveal-pressure` (pixels, default 100). It hides again shortly after the
 pointer leaves.
 

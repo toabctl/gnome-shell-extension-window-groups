@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 
 import {
     padArray, moveItem, removeItem, indexOfName, chooseGroupSlot,
-    contrastOn, luminance,
+    contrastOn, luminance, chooseRehomeTarget, UNGROUPED,
 } from './model.js';
 
 /* ---- padArray --------------------------------------------------------- */
@@ -145,6 +145,49 @@ test('the cap never blocks reuse of an existing or empty group', () => {
 
 test('a missing window count is treated as empty, not as a crash', () => {
     assert.deepEqual(slot(['Main', ''], [1], 'New'), {action: 'reuse', index: 1});
+});
+
+/* ---- chooseRehomeTarget ----------------------------------------------- */
+
+const rehome = (names, removing) => chooseRehomeTarget({names, removing});
+
+test('an existing Ungrouped group is reused', () => {
+    assert.deepEqual(rehome(['Work', UNGROUPED, 'Chat'], 0),
+        {action: 'existing', index: 1});
+});
+
+test('the fallback is matched case-insensitively', () => {
+    assert.deepEqual(rehome(['Work', 'ungrouped'], 0),
+        {action: 'existing', index: 1});
+});
+
+test('without one, it is created rather than dumping into a neighbour', () => {
+    // Dropping the windows into whichever group happens to be adjacent is
+    // what this replaced: it silently merged unrelated work.
+    assert.deepEqual(rehome(['Work', 'Chat', 'Docs'], 1),
+        {action: 'create', index: -1});
+});
+
+test('dissolving the fallback itself falls back to a neighbour', () => {
+    assert.deepEqual(rehome([UNGROUPED, 'Work'], 0),
+        {action: 'existing', index: 1});
+    assert.deepEqual(rehome(['Work', UNGROUPED], 1),
+        {action: 'existing', index: 0});
+});
+
+test('the last remaining group cannot be dissolved', () => {
+    assert.deepEqual(rehome(['Work'], 0), {action: 'refuse', index: -1});
+    assert.deepEqual(rehome([UNGROUPED], 0), {action: 'refuse', index: -1});
+    assert.deepEqual(rehome([], 0), {action: 'refuse', index: -1});
+});
+
+test('the target is never the group being removed', () => {
+    const names = ['a', 'b', UNGROUPED, 'd'];
+    for (let i = 0; i < names.length; i++) {
+        const {action, index} = rehome(names, i);
+        if (action === 'existing')
+            assert.notEqual(index, i, `group ${i} was rehomed into itself`);
+    }
 });
 
 /* ---- contrast --------------------------------------------------------- */

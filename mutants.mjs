@@ -72,6 +72,16 @@ const MUTANTS = [
     ['model.js', 'model.test.mjs',
         'return luminance > 0.45', 'return luminance > 0.05',
         'wrong contrast threshold'],
+    ['model.js', 'model.test.mjs',
+        'if (ungrouped !== -1)\n        return {action: \'existing\', index: ungrouped};\n    return {action: \'create\', index: -1};',
+        'return {action: \'existing\', index: removing === 0 ? 1 : removing - 1};',
+        'rehome into the neighbouring group instead of Ungrouped'],
+    ['model.js', 'model.test.mjs',
+        'if (ungrouped === removing) {', 'if (false) {',
+        'let the fallback group rehome into itself'],
+    ['model.js', 'model.test.mjs',
+        'if (names.length <= 1)', 'if (names.length < 0)',
+        'allow dissolving the last group'],
 
     // ---- arranger.js
     ['arranger.js', 'arranger.test.mjs',

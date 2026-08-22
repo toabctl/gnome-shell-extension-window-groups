@@ -79,6 +79,39 @@ export function chooseGroupSlot({names, windowCounts, name, cap}) {
     return {action: 'append', index: -1};
 }
 
+/** The group windows fall back into when their own group is dissolved. */
+export const UNGROUPED = 'Ungrouped';
+
+/**
+ * Where the windows of a group should go when that group is removed.
+ *
+ * A window is always on some workspace and a group *is* a workspace, so
+ * "no group" has to be a real group. It is created on demand rather than
+ * reserved up front, so someone who never dissolves a group never sees it.
+ *
+ * @param {object} opts
+ * @param {string[]} opts.names stored names, '' meaning never named
+ * @param {number} opts.removing index of the group being dissolved
+ * @returns {{action: 'existing'|'create'|'refuse', index: number}}
+ *   'refuse' when there is nowhere sensible to put them.
+ */
+export function chooseRehomeTarget({names, removing}) {
+    if (names.length <= 1)
+        return {action: 'refuse', index: -1};
+
+    const ungrouped = indexOfName(names, UNGROUPED);
+
+    // Dissolving the fallback itself would send its windows to itself.
+    if (ungrouped === removing) {
+        const neighbour = removing === 0 ? 1 : removing - 1;
+        return {action: 'existing', index: neighbour};
+    }
+
+    if (ungrouped !== -1)
+        return {action: 'existing', index: ungrouped};
+    return {action: 'create', index: -1};
+}
+
 /**
  * Black or white ink for a filled swatch, by sRGB relative luminance.
  * Chrome's yellow group needs dark text where its blue needs light.
