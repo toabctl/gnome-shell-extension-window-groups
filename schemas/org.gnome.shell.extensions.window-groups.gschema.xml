@@ -20,6 +20,14 @@
       <summary>Export a D-Bus interface for tests to read state and drive the extension</summary>
       <description>Off in normal use. Tests need an oracle that reports what the extension believes, rather than inferring it from pixels.</description>
     </key>
+    <key name="hide-delay" type="i">
+      <default>800</default>
+      <summary>How long the sidebar waits after the pointer leaves, in milliseconds</summary>
+    </key>
+    <key name="animation-duration" type="i">
+      <default>320</default>
+      <summary>Base animation length, in milliseconds. Reveal is a little longer, hide a little shorter.</summary>
+    </key>
     <key name="blur" type="b">
       <default>true</default>
       <summary>Frost the content behind the sidebar, so it reads as floating above the windows</summary>

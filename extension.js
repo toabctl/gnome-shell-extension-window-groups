@@ -31,14 +31,24 @@ import {
 
 const ICON_SIZE = 18;
 const COMPACT_ICON_SIZE = 24;
-const SLIDE_DURATION = 200;
-const HIDE_DELAY = 400;
+const ROW_ANIMATION = 160;
 const TOOLTIP_DELAY = 450;
 const HOVER_EXPAND_DELAY = 180;
 const HOVER_COLLAPSE_DELAY = 300;
 const EDGE_DWELL = 250;
 const REVEAL_COMMIT = 1500;
 const REVEAL_POLL = 300;
+/** Animation length, honouring the desktop's reduce-motion preference and
+ *  GNOME's own slow-down factor — hold Shift in the overview and everything
+ *  including this slows down, which is how you actually inspect a transition.
+ *  Returning 0 makes ease() apply the target immediately. */
+function duration(base) {
+    const settings = St.Settings.get();
+    if (!settings.enable_animations)
+        return 0;
+    return Math.round(base * settings.slow_down_factor);
+}
+
 /** How far open the "door" starts. Past about 80 degrees the panel is edge-on
  *  and the swing reads as a flicker rather than a rotation. */
 const SWING_ANGLE = 72;
@@ -783,12 +793,29 @@ class GroupSection extends St.BoxLayout {
         entry.clutter_text.set_selection(0, -1);
     }
 
-    addWindow(win, focused) {
+    addWindow(win, focused, animate = false) {
         const row = new WindowRow(win, this._sidebar,
             this._model.color(this._index), this._compact);
         row.setFocused(focused);
         this._rows.push(row);
         this._rowBox.add_child(row);
+
+        // Only a genuinely new window animates. Every rebuild recreates every
+        // row, so animating unconditionally would make the whole list twitch
+        // on each title change.
+        if (animate && duration(ROW_ANIMATION) > 0) {
+            row.set_pivot_point(0, 0.5);
+            row.opacity = 0;
+            row.scale_x = 0.92;
+            row.translation_x = -12;
+            row.ease({
+                opacity: 255,
+                scale_x: 1,
+                translation_x: 0,
+                duration: duration(ROW_ANIMATION),
+                mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+            });
+        }
         return row;
     }
 
@@ -1106,6 +1133,9 @@ class Sidebar {
         this._sections = [];
         this._rebuildId = 0;
         this._trackedWindows = new Set();
+        // Windows already drawn at least once, so a rebuild does not replay
+        // the entry animation for the whole list.
+        this._seenWindows = new WeakSet();
 
         this.actor = new St.BoxLayout({
             orientation: Clutter.Orientation.VERTICAL,
@@ -1330,6 +1360,10 @@ class Sidebar {
     }
 
 
+    _animationBase() {
+        return Math.max(0, this._settings.get_int('animation-duration'));
+    }
+
     _swings() {
         return this._settings.get_string('reveal-style') === 'swing';
     }
@@ -1352,13 +1386,13 @@ class Sidebar {
                 rotation_angle_y: 0,
                 translation_z: 0,
                 opacity: 255,
-                duration: SLIDE_DURATION * 1.6,
+                duration: duration(this._animationBase() * 1.15),
                 mode: Clutter.AnimationMode.EASE_OUT_BACK,
             });
         } else {
             this.actor.ease({
                 translation_x: 0,
-                duration: SLIDE_DURATION,
+                duration: duration(this._animationBase()),
                 mode: Clutter.AnimationMode.EASE_OUT_QUAD,
             });
         }
@@ -1433,7 +1467,10 @@ class Sidebar {
                 rotation_angle_y: -SWING_ANGLE,
                 translation_z: -120,
                 opacity: 0,
-                duration: SLIDE_DURATION * 1.3,
+                // Slower going away than coming back: a panel that vanishes
+                // the instant the pointer strays feels twitchy, and you often
+                // leave it only to come straight back.
+                duration: duration(this._animationBase() * 1.4),
                 mode: Clutter.AnimationMode.EASE_IN_QUAD,
                 // Hidden rather than merely transparent: a rotated actor still
                 // picks, and an invisible panel eating clicks at the screen
@@ -1449,7 +1486,7 @@ class Sidebar {
         }
         this.actor.ease({
             translation_x: offscreen,
-            duration: SLIDE_DURATION,
+            duration: duration(this._animationBase() * 1.4),
             mode: Clutter.AnimationMode.EASE_OUT_QUAD,
         });
     }
@@ -1457,7 +1494,8 @@ class Sidebar {
     _queueHide() {
         this._cancelHide();
         this._hideTimeoutId = GLib.timeout_add(
-            GLib.PRIORITY_DEFAULT, HIDE_DELAY, () => {
+            GLib.PRIORITY_DEFAULT,
+            Math.max(0, this._settings.get_int('hide-delay')), () => {
                 this._hideTimeoutId = 0;
                 // Do not slide out from under a pointer that came back.
                 if (!this.actor.hover)
@@ -1679,7 +1717,9 @@ class Sidebar {
             this._sections.push(section);
 
             for (const win of this._model.windows(i)) {
-                section.addWindow(win, win === focus);
+                const isNew = !this._seenWindows.has(win);
+                section.addWindow(win, win === focus, isNew);
+                this._seenWindows.add(win);
                 this._trackWindow(win);
             }
         }

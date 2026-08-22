@@ -147,6 +147,36 @@ While hidden the actor is `hide()`n, not merely transparent: a rotated actor
 still picks, and an invisible panel eating clicks at the screen edge is worse
 than no panel.
 
+## Animation
+
+Every Clutter actor animates any GObject property through `ease()`, with 41
+easing modes — position, size, opacity, scale, all three rotation axes, all
+three translation axes, and effect properties such as blur radius. So
+anything visible here can be animated; the constraint is taste, not API.
+
+Two rules the code follows:
+
+- **Honour the desktop.** `duration()` returns 0 when
+  `St.Settings.enable_animations` is off, which makes `ease()` apply the
+  target immediately — reduce-motion users get instant transitions rather
+  than a broken UI. It also multiplies by `slow_down_factor`, so holding
+  Shift in the overview slows these animations too, which is how you actually
+  inspect one.
+- **Animate events, not redraws.** A new window's row fades and slides in, but
+  a rebuild does not replay that for every row — the sidebar rebuilds on every
+  title change, so unconditional animation would make the list twitch
+  constantly. A `WeakSet` of already-drawn windows draws the distinction.
+
+Timing lives in settings rather than constants: `animation-duration` (320 ms
+base; reveal is 1.15×, hide 1.4×) and `hide-delay` (800 ms). Hiding is
+deliberately slower than revealing — a panel that vanishes the instant the
+pointer strays feels twitchy, and you often leave it only to come straight
+back.
+
+Obvious next candidates, none done yet: rows sliding out as windows close,
+groups animating when reordered, and cross-fading window actors through a
+layout change instead of snapping.
+
 ## Auto-hide
 
 On by default. The pin button in the sidebar header toggles it — pinned keeps
