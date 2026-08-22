@@ -1,3 +1,7 @@
+// Generated with AI for personal use.
+// Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
+// and can maintain this code.
+
 /* search.js
  *
  * Ranking for the window search popup. No GNOME imports, so it can be unit

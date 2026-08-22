@@ -1,3 +1,7 @@
+// Generated with AI for personal use.
+// Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
+// and can maintain this code.
+
 /* arranger.js
  *
  * Applies a group's layout to real windows. Deliberately imports nothing from

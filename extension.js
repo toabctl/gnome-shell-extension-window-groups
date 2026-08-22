@@ -1,3 +1,7 @@
+// Generated with AI for personal use.
+// Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
+// and can maintain this code.
+
 /* extension.js
  *
  * Window Groups — a left sidebar of open windows, organised into named,
