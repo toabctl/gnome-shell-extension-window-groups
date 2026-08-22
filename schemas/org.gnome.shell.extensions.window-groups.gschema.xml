@@ -15,6 +15,15 @@
       <summary>Open the window search popup</summary>
       <description>Chrome uses Ctrl+Shift+A, but that belongs to applications; a global grab would take it away from them.</description>
     </key>
+    <key name="debug-interface" type="b">
+      <default>false</default>
+      <summary>Export a D-Bus interface for tests to read state and drive the extension</summary>
+      <description>Off in normal use. Tests need an oracle that reports what the extension believes, rather than inferring it from pixels.</description>
+    </key>
+    <key name="sidebar-margin" type="i">
+      <default>6</default>
+      <summary>Gap between the sidebar and the screen edges, in logical pixels</summary>
+    </key>
     <key name="compact" type="b">
       <default>false</default>
       <summary>Shrink the sidebar to icons only, like Chrome's collapsed vertical tabs</summary>

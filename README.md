@@ -115,6 +115,18 @@ width, while the visible sidebar is registered with `affectsStruts: false`. If
 the strut grew too, every window on screen would resize each time the pointer
 brushed the edge.
 
+## Closing a group
+
+The × on a group header asks first when the group has windows, because
+Chrome's equivalent closes the tabs and doing that to several windows on one
+click deserves a question. The dialog offers both outcomes:
+
+- **Keep windows, remove group** — the old behaviour: windows move to the
+  neighbouring group and only the group disappears.
+- **Close N windows** — asks each window to close, as Chrome does.
+
+An empty group is removed immediately, with no dialog.
+
 ## Auto-hide
 
     gsettings set org.gnome.shell.extensions.window-groups auto-hide true

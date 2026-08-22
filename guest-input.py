@@ -46,7 +46,9 @@ KEYS = {
     "l": 38, "semicolon": 39, "shift": 42,
     "z": 44, "x": 45, "c": 46, "v": 47, "b": 48, "n": 49, "m": 50,
     "comma": 51, "dot": 52, "slash": 53, "space": 57,
-    "up": 103, "left": 105, "right": 106, "down": 108,
+    "f1": 59, "f2": 60, "f3": 61, "f4": 62, "f5": 63, "f6": 64,
+    "f7": 65, "f8": 66, "f9": 67, "f10": 68, "f11": 87, "f12": 88,
+    "home": 102, "up": 103, "left": 105, "right": 106, "end": 107, "down": 108,
     "super": 125, "meta": 125,
 }
 
@@ -126,19 +128,18 @@ class Keyboard:
     def move_rel(self, dx, dy):
         """Move in small steps: one huge jump can be coalesced or clamped,
         and hover logic wants real motion to react to."""
-        # Step count must not exceed the smaller axis, or its per-step delta
-        # rounds to zero and that axis never moves at all.
-        steps = max(abs(dx), abs(dy), 1)
-        steps = min(steps, 60)
-        if dx:
-            steps = min(steps, abs(dx))
-        if dy:
-            steps = min(steps, abs(dy))
-        steps = max(steps, 1)
-        for _ in range(steps):
-            self._emit(EV_REL, REL_X, round(dx / steps), self.pfd)
-            self._emit(EV_REL, REL_Y, round(dy / steps), self.pfd)
+        steps = min(max(abs(dx), abs(dy), 1), 60)
+        # Round per step and the remainder is lost: 248 in 60 steps emits
+        # 4 each, landing on 240. Track what has actually been sent and take
+        # the difference each time so the total is exact.
+        sent_x = sent_y = 0
+        for i in range(steps):
+            want_x = round(dx * (i + 1) / steps)
+            want_y = round(dy * (i + 1) / steps)
+            self._emit(EV_REL, REL_X, want_x - sent_x, self.pfd)
+            self._emit(EV_REL, REL_Y, want_y - sent_y, self.pfd)
             self._sync(self.pfd)
+            sent_x, sent_y = want_x, want_y
             time.sleep(0.004)
         time.sleep(0.05)
 

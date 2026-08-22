@@ -16,6 +16,8 @@
 #     ./run-lxd.sh console     open the interactive desktop (needs virt-viewer)
 #     ./run-lxd.sh shot F.png  grab a screenshot from inside the guest
 #     ./run-lxd.sh res 2.0     re-pin the guest resolution if it goes tiny
+#     ./run-lxd.sh demo        put windows in every group, one per arrangement
+#     ./run-lxd.sh state       dump what the extension believes, as JSON
 #     ./run-lxd.sh log         tail the guest shell journal
 #     ./run-lxd.sh down        stop the VM
 #     ./run-lxd.sh destroy     delete the VM
@@ -140,6 +142,119 @@ cmd_res() {
         "$scale" "$mode"
 }
 
+# Populate every group, so the console opens on something worth looking at:
+# each arrangement side by side rather than every window piling into group 1.
+#
+# New windows land on the active workspace, and a group *is* a workspace, so
+# the only way to place them is to switch first. There is no external API for
+# that, hence the synthetic keypresses.
+DEMO_GROUPS=(grid tabbed free)
+DEMO_COLORS=(green yellow purple)
+DEMO_APPS=(
+    "nautilus gnome-disks baobab"      # grid: three tiles
+    "gnome-text-editor yelp"           # tabbed: two stacked
+    "gnome-calculator seahorse"        # free: left alone
+)
+
+# Ask the extension what it believes, rather than inferring it. Mutter only
+# maintains the EWMH _NET_CURRENT_DESKTOP property once X11 clients exist, so
+# reading it from the XWayland root is unreliable on a fresh session.
+wg_dbus() {
+    local method="$1"; shift
+    as_user gdbus call --session \
+        --dest org.gnome.Shell \
+        --object-path /org/gnome/Shell/Extensions/WindowGroups \
+        --method "org.gnome.Shell.Extensions.WindowGroups.$method" "$@" 2>/dev/null
+}
+
+enable_debug_iface() {
+    local u; u="$(guest_user)"
+    as_user env GSETTINGS_SCHEMA_DIR="/home/$u/.local/share/gnome-shell/extensions/$UUID/schemas" \
+        gsettings set org.gnome.shell.extensions.window-groups debug-interface true
+    for _ in $(seq 1 20); do
+        wg_dbus GetState >/dev/null 2>&1 && return 0
+        sleep 0.5
+    done
+    die "the debug D-Bus interface never appeared"
+}
+
+cmd_state() {
+    require_lxd
+    enable_debug_iface
+    wg_dbus GetState | sed -e "s/^('//" -e "s/',)$//" -e 's/\\"/"/g' |
+        python3 -m json.tool
+}
+
+active_group() {
+    wg_dbus GetState | grep -o '"activeGroup":[0-9]*' | grep -o '[0-9]*$'
+}
+
+# Switch to a group and confirm we got there. New windows land on the active
+# workspace, so launching before the switch completes puts them in the wrong
+# group — which is exactly what happened when this only slept and hoped.
+switch_to_group() {
+    local index="$1"
+    wg_dbus ActivateGroup "$index" >/dev/null
+    for _ in $(seq 1 20); do
+        [ "$(active_group)" = "$index" ] && return 0
+        sleep 0.3
+    done
+    echo "    warning: could not reach group $index"
+    return 1
+}
+
+cmd_demo() {
+    require_lxd
+    local u; u="$(guest_user)"
+    local schema="/home/$u/.local/share/gnome-shell/extensions/$UUID/schemas"
+
+    as_user gnome-extensions disable ubuntu-dock@ubuntu.com 2>/dev/null || true
+    # A second tiler moving the same windows produces symptoms that look like
+    # random flicker.
+    as_user gnome-extensions disable tiling-assistant@ubuntu.com 2>/dev/null || true
+
+    as_user gsettings set org.gnome.desktop.wm.preferences num-workspaces 3
+    as_user gsettings set org.gnome.desktop.wm.preferences workspace-names \
+        "['${DEMO_GROUPS[0]}', '${DEMO_GROUPS[1]}', '${DEMO_GROUPS[2]}']"
+    as_user env GSETTINGS_SCHEMA_DIR="$schema" gsettings set \
+        org.gnome.shell.extensions.window-groups colors \
+        "['${DEMO_COLORS[0]}', '${DEMO_COLORS[1]}', '${DEMO_COLORS[2]}']"
+    as_user env GSETTINGS_SCHEMA_DIR="$schema" gsettings set \
+        org.gnome.shell.extensions.window-groups arrangements \
+        "['${DEMO_GROUPS[0]}', '${DEMO_GROUPS[1]}', '${DEMO_GROUPS[2]}']"
+
+    enable_debug_iface
+
+    for i in 0 1 2; do
+        echo "  ${DEMO_GROUPS[$i]}: ${DEMO_APPS[$i]}"
+        switch_to_group "$i"
+        for app in ${DEMO_APPS[$i]}; do
+            lxc exec "$VM" -- sudo -u "$u" \
+                env XDG_RUNTIME_DIR=/run/user/1000 \
+                    DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+                    WAYLAND_DISPLAY=wayland-0 \
+                setsid "$app" >/dev/null 2>&1 &
+            sleep 4
+        done
+        # Let the last window finish mapping before the next switch, or it
+        # follows us to the next group.
+        sleep 2
+    done
+
+    switch_to_group 0
+    echo "demo ready"
+}
+
+# True when none of the demo applications are running, so opening the console
+# twice does not launch a second copy of everything.
+demo_needed() {
+    local app
+    for app in ${DEMO_APPS[0]} ${DEMO_APPS[1]} ${DEMO_APPS[2]}; do
+        lxc exec "$VM" -- pgrep -u 1000 -x "$app" >/dev/null 2>&1 && return 1
+    done
+    return 0
+}
+
 cmd_console() {
     command -v remote-viewer >/dev/null \
         || die "remote-viewer missing. Install with:  sudo apt install virt-viewer"
@@ -159,6 +274,11 @@ cmd_console() {
         echo "     in remote-viewer, then run ./run-lxd.sh res 2.0"
     fi
     cmd_res "${WG_SCALE:-2.0}" "${WG_MODE:-3840x2160}"
+
+    if [ -z "${WG_NO_DEMO:-}" ] && demo_needed; then
+        echo "seeding a window in every group:"
+        cmd_demo
+    fi
 
     echo "opening console — close the window to return here"
     lxc console "$VM" --type=vga
@@ -197,6 +317,8 @@ case "${1:-up}" in
     console) cmd_console ;;
     shot)    shift; cmd_shot "${1:-}" ;;
     res)     shift; cmd_res "${1:-2.0}" "${2:-3840x2160}" ;;
+    demo)    cmd_demo ;;
+    state)   cmd_state ;;
     log)     cmd_log ;;
     down)    lxc stop "$VM" ;;
     destroy) lxc delete --force "$VM" ;;

@@ -21,6 +21,7 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as DND from 'resource:///org/gnome/shell/ui/dnd.js';
 import * as Layout from 'resource:///org/gnome/shell/ui/layout.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
 
 import {computeLayout, resizeToState} from './layouts.js';
 import {rankWindows} from './search.js';
@@ -260,6 +261,17 @@ class GroupModel {
         this._spliceParallel(index);
         global.workspace_manager.remove_workspace(
             this.workspace(index), global.get_current_time());
+    }
+
+    /** Close every window in a group, then remove it. Destructive; callers
+     *  must confirm first. */
+    closeGroup(index) {
+        const time = global.get_current_time();
+        for (const win of this.windows(index))
+            win.delete(time);
+        // The windows go away asynchronously, so the group cannot be removed
+        // here — removeGroup() would rehome windows that are still closing.
+        // The caller removes it once they are gone.
     }
 
     /** Move a group to an arbitrary position. reorder_workspace() has move
@@ -669,7 +681,7 @@ class GroupSection extends St.BoxLayout {
 
         const remove = iconButton('window-close-symbolic',
             'Delete this group (its windows move to the group above)');
-        remove.connect('clicked', () => this._model.removeGroup(this._index));
+        remove.connect('clicked', () => this._confirmRemove());
         remove.reactive = this._model.count > 1;
         remove.get_child().style = `color: ${ink};`;
         header.add_child(remove);
@@ -734,6 +746,59 @@ class GroupSection extends St.BoxLayout {
 
     getDragActorSource() {
         return this._header;
+    }
+
+    /** Chrome's group close button closes the tabs. Closing several windows
+     *  at once on one click is worth a question, so an empty group goes
+     *  immediately and anything else asks — and offers the non-destructive
+     *  option too, since until now this button only ungrouped. */
+    _confirmRemove() {
+        const count = this._model.windows(this._index).length;
+        const name = this._model.name(this._index);
+
+        if (count === 0) {
+            this._model.removeGroup(this._index);
+            return;
+        }
+
+        const dialog = new ModalDialog.ModalDialog({destroyOnClose: true});
+        dialog.contentLayout.add_child(new St.Label({
+            style_class: 'wg-confirm-title',
+            text: count === 1
+                ? `Close 1 window in “${name}”?`
+                : `Close ${count} windows in “${name}”?`,
+        }));
+        dialog.contentLayout.add_child(new St.Label({
+            style_class: 'wg-confirm-body',
+            text: count === 1
+                ? 'The window will be asked to close. Unsaved work may be lost.'
+                : `All ${count} windows will be asked to close. ` +
+                  'Unsaved work may be lost.',
+        }));
+
+        dialog.setButtons([
+            {
+                label: 'Cancel',
+                key: Clutter.KEY_Escape,
+                isDefault: true,
+                action: () => dialog.close(),
+            },
+            {
+                label: 'Keep windows, remove group',
+                action: () => {
+                    dialog.close();
+                    this._model.removeGroup(this._index);
+                },
+            },
+            {
+                label: count === 1 ? 'Close window' : `Close ${count} windows`,
+                action: () => {
+                    dialog.close();
+                    this._model.closeGroup(this._index);
+                },
+            },
+        ]);
+        dialog.open();
     }
 
     _beginRename() {
@@ -1262,7 +1327,9 @@ class Sidebar {
     _hide(immediate = false) {
         this._cancelHide();
         this._revealed = false;
-        const offscreen = -this.actor.width;
+        // Include the margin, or a sliver of the panel stays on screen.
+        const offscreen =
+            -(this.actor.width + this._settings.get_int('sidebar-margin'));
         this.actor.remove_all_transitions();
         if (immediate) {
             this.actor.translation_x = offscreen;
@@ -1426,15 +1493,23 @@ class Sidebar {
         const visible = this._effectiveCompact()
             ? this._settings.get_int('compact-width')
             : this._settings.get_int('sidebar-width');
+        const margin = Math.max(0, this._settings.get_int('sidebar-margin'));
 
-        // x1 <= monitor.x is what makes layout.js classify this as a
-        // Meta.Side.LEFT strut, so the work area shrinks for real.
+        // The strut keeps the full reserved width and touches the screen edge:
+        // x1 <= monitor.x is what makes layout.js classify it as a
+        // Meta.Side.LEFT strut at all, and insetting it would let windows sit
+        // under the sidebar rather than beside it.
         this._strut.set_position(monitor.x, monitor.y + top);
         this._strut.set_size(this._autoHide ? 0 : reserved, monitor.height - top);
-        this.actor.set_position(monitor.x, monitor.y + top);
-        this.actor.set_size(visible, monitor.height - top);
+
+        // The visible panel floats inside that reservation, so the wallpaper
+        // shows through on the left, top and bottom.
+        this.actor.set_position(monitor.x + margin, monitor.y + top + margin);
+        this.actor.set_size(
+            Math.max(1, visible - margin),
+            Math.max(1, monitor.height - top - 2 * margin));
         if (this._autoHide && !this._revealed)
-            this.actor.translation_x = -visible;
+            this.actor.translation_x = -(visible + margin);
     }
 
     queueRebuild() {
@@ -1494,6 +1569,90 @@ class Sidebar {
                 this.queueRebuild();
             },
             this);
+    }
+}
+
+/* -------------------------------------------------------------------------
+ * Debug interface
+ * ---------------------------------------------------------------------- */
+
+const DEBUG_IFACE = `
+<node>
+  <interface name="org.gnome.Shell.Extensions.WindowGroups">
+    <method name="GetState">
+      <arg type="s" direction="out" name="json"/>
+    </method>
+    <method name="ActivateGroup">
+      <arg type="u" direction="in" name="index"/>
+    </method>
+    <method name="SetArrangement">
+      <arg type="u" direction="in" name="index"/>
+      <arg type="s" direction="in" name="arrangement"/>
+    </method>
+  </interface>
+</node>`;
+
+/**
+ * A read/drive surface for tests, off unless `debug-interface` is set.
+ *
+ * Everything before this had to infer state from screenshots, which produced
+ * two confidently wrong conclusions: a stale image read as proof a change had
+ * not applied, and a pixel scan that counted a dark window as part of the
+ * sidebar. Asking the extension what it believes removes that whole class of
+ * error.
+ */
+class DebugInterface {
+    constructor(model, sidebar, tags) {
+        this._model = model;
+        this._sidebar = sidebar;
+        this._tags = tags;
+        this._impl = Gio.DBusExportedObject.wrapJSObject(DEBUG_IFACE, this);
+        this._impl.export(Gio.DBus.session,
+            '/org/gnome/Shell/Extensions/WindowGroups');
+    }
+
+    destroy() {
+        this._impl?.unexport();
+        this._impl = null;
+    }
+
+    GetState() {
+        const groups = [];
+        for (let i = 0; i < this._model.count; i++) {
+            groups.push({
+                index: i,
+                name: this._model.name(i),
+                color: this._model.color(i).name,
+                arrangement: this._model.arrangement(i),
+                active: i === this._model.activeIndex,
+                windows: this._model.windows(i).map(win => ({
+                    title: win.get_title() ?? '',
+                    wmClass: win.get_wm_class() ?? '',
+                    monitor: win.get_monitor(),
+                    tag: this._tags?.tag(win) ?? '',
+                    frame: (({x, y, width, height}) =>
+                        ({x, y, width, height}))(win.get_frame_rect()),
+                })),
+            });
+        }
+        return JSON.stringify({
+            groups,
+            activeGroup: this._model.activeIndex,
+            sidebar: {
+                width: this._sidebar?.actor?.width ?? 0,
+                compact: this._sidebar?._effectiveCompact?.() ?? false,
+            },
+        });
+    }
+
+    ActivateGroup(index) {
+        this._model.workspace(index)?.activate(global.get_current_time());
+    }
+
+    SetArrangement(index, arrangement) {
+        if (!ARRANGEMENTS.includes(arrangement))
+            throw new Error(`unknown arrangement: ${arrangement}`);
+        this._model.setArrangement(index, arrangement);
     }
 }
 
@@ -1606,12 +1765,24 @@ export default class WindowGroupsExtension extends Extension {
             },
             this);
 
+        if (this._settings.get_boolean('debug-interface')) {
+            this._debug = new DebugInterface(
+                this._model, this._sidebar, this._tags);
+        }
+
         this._settings.connectObject(
             'changed::sidebar-width', () => this._sidebar.updateGeometry(),
             // Width, row contents and header shape all differ, and the strut
             // follows the actor's allocation, so a full rebuild is simplest.
             'changed::compact', () => this._reloadSidebar(),
             'changed::compact-width', () => this._sidebar.updateGeometry(),
+            'changed::sidebar-margin', () => this._sidebar.updateGeometry(),
+            'changed::debug-interface', () => {
+                this._debug?.destroy();
+                this._debug = this._settings.get_boolean('debug-interface')
+                    ? new DebugInterface(this._model, this._sidebar, this._tags)
+                    : null;
+            },
             'changed::expand-on-hover', () => this._reloadSidebar(),
             // The header buttons call queueRebuild() themselves, but a write
             // from outside (gsettings, a prefs dialog, a second monitor of
@@ -1638,9 +1809,13 @@ export default class WindowGroupsExtension extends Extension {
         this._sidebar = new Sidebar(
             this._model, this._arranger, this._settings, this._tags);
         this._sidebar.search = this._search;
+        if (this._debug)
+            this._debug._sidebar = this._sidebar;
     }
 
     disable() {
+        this._debug?.destroy();
+        this._debug = null;
         Main.wm.removeKeybinding('search-windows');
         this._search?.destroy();
         this._search = null;

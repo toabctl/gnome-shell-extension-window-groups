@@ -3,7 +3,8 @@
        The explicit colour matters: without it labels inherit the theme
        foreground and turn dark-on-dark under the default light theme. */
     background-color: rgba(0, 0, 0, 0.85);
-    border-right: 1px solid rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 12px;
     padding: 6px 0 0 0;
     color: #ffffff;
 }
@@ -254,4 +255,15 @@
 .wg-search-empty {
     padding: 14px;
     color: rgba(255, 255, 255, 0.5);
+}
+
+.wg-confirm-title {
+    font-weight: bold;
+    font-size: 1.1em;
+    padding-bottom: 6px;
+}
+
+.wg-confirm-body {
+    color: rgba(255, 255, 255, 0.7);
+    max-width: 24em;
 }
