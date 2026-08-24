@@ -34,9 +34,10 @@ pointer() {
 
 input() { lxc exec "$VM" -- python3 /root/guest-input.py "$@" >/dev/null 2>&1; }
 
-# Start from a known corner so the first estimate is not wild.
+# No re-homing first. The loop reads the real position before it moves, so a
+# known start buys nothing — and flinging the pointer to the corner disturbs
+# whatever is open, which broke targeting inside a menu.
 converged=0
-input move 0,0
 for attempt in 1 2 3 4 5 6 7 8; do
     read -r px py <<<"$(pointer)"
     [ -z "${px:-}" ] && { echo "cannot read the pointer; is debug-interface on?" >&2; exit 1; }

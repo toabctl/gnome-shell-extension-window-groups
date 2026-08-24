@@ -151,13 +151,14 @@ cmd_res() {
 # New windows land on the active workspace, and a group *is* a workspace, so
 # the only way to place them is to switch first. There is no external API for
 # that, hence the synthetic keypresses.
-DEMO_GROUPS=(grid tabbed free)
+DEMO_GROUPS=(columns free notes)
 DEMO_COLORS=(green yellow purple)
 DEMO_APPS=(
-    "nautilus gnome-disks baobab"      # grid: three tiles
-    "gnome-text-editor yelp"           # tabbed: two stacked
+    "nautilus gnome-disks baobab"      # columns: three tiles
+    "gnome-text-editor yelp"           # free: left alone
     "gnome-calculator seahorse"        # free: left alone
 )
+DEMO_ARRANGEMENTS=(columns free free)
 
 # Ask the extension what it believes, rather than inferring it. Mutter only
 # maintains the EWMH _NET_CURRENT_DESKTOP property once X11 clients exist, so
@@ -260,7 +261,7 @@ cmd_demo() {
         "['${DEMO_COLORS[0]}', '${DEMO_COLORS[1]}', '${DEMO_COLORS[2]}']"
     as_user env GSETTINGS_SCHEMA_DIR="$schema" gsettings set \
         org.gnome.shell.extensions.window-groups arrangements \
-        "['${DEMO_GROUPS[0]}', '${DEMO_GROUPS[1]}', '${DEMO_GROUPS[2]}']"
+        "['${DEMO_ARRANGEMENTS[0]}', '${DEMO_ARRANGEMENTS[1]}', '${DEMO_ARRANGEMENTS[2]}']"
 
     enable_debug_iface
 

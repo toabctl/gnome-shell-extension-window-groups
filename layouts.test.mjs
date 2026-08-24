@@ -8,7 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-    LAYOUTS, DEFAULT_STATE, computeLayout, resizeToState, gridShape,
+    LAYOUTS, DEFAULT_STATE, computeLayout, resizeToState,
 } from './layouts.js';
 
 const AREA = {x: 0, y: 27, width: 1920, height: 1053};
@@ -72,17 +72,14 @@ test('rects are integral, non-degenerate and inside the area', () => {
     }
 });
 
-test('tiles never overlap, except tabbed where they all coincide', () => {
+test('tiles never overlap', () => {
     for (const kind of TILING) {
         for (let n = 2; n <= 9; n++) {
             const rects = computeLayout(kind, n, AREA);
             for (let i = 0; i < rects.length; i++) {
                 for (let j = i + 1; j < rects.length; j++) {
-                    const hit = overlaps(rects[i], rects[j]);
-                    if (kind === 'tabbed')
-                        assert.ok(hit, 'tabbed tiles should coincide');
-                    else
-                        assert.ok(!hit, `${kind}/${n}: ${i} overlaps ${j}`);
+                    assert.ok(!overlaps(rects[i], rects[j]),
+                        `${kind}/${n}: ${i} overlaps ${j}`);
                 }
             }
         }
@@ -101,60 +98,6 @@ test('columns tile the width exactly, with no seams', () => {
                 `columns/${n}: seam between ${i - 1} and ${i} is ${gap}`);
         }
     }
-});
-
-test('rows tile the height exactly, with no seams', () => {
-    for (let n = 1; n <= 12; n++) {
-        const rects = computeLayout('rows', n, AREA);
-        const usable = AREA.height - 2 * DEFAULT_STATE.outerGap;
-        const spanned = rects.at(-1).y + rects.at(-1).height - rects[0].y;
-        assert.equal(spanned, usable, `rows/${n} does not span the height`);
-        for (let i = 1; i < n; i++) {
-            const gap = rects[i].y - (rects[i - 1].y + rects[i - 1].height);
-            assert.equal(gap, DEFAULT_STATE.gap, `rows/${n}: seam at ${i}`);
-        }
-    }
-});
-
-test('tabbed gives every window the whole inner area', () => {
-    const rects = computeLayout('tabbed', 4, AREA);
-    for (const r of rects) {
-        assert.deepEqual(r, {
-            x: AREA.x + DEFAULT_STATE.outerGap,
-            y: AREA.y + DEFAULT_STATE.outerGap,
-            width: AREA.width - 2 * DEFAULT_STATE.outerGap,
-            height: AREA.height - 2 * DEFAULT_STATE.outerGap,
-        });
-    }
-});
-
-test('grid shape distributes items as evenly as possible', () => {
-    assert.deepEqual(gridShape(1), [1]);
-    assert.deepEqual(gridShape(2), [2]);
-    assert.deepEqual(gridShape(4), [2, 2]);
-    assert.deepEqual(gridShape(5), [3, 2]);
-    assert.deepEqual(gridShape(7), [3, 2, 2]);
-    for (let n = 1; n <= 30; n++) {
-        const shape = gridShape(n);
-        assert.equal(shape.reduce((a, b) => a + b, 0), n, `grid ${n} loses items`);
-        assert.ok(Math.max(...shape) - Math.min(...shape) <= 1,
-            `grid ${n} is lopsided: ${shape}`);
-    }
-});
-
-test('master-stack gives the master the configured share', () => {
-    const rects = computeLayout('master-stack', 3, AREA, {masterRatio: 0.7});
-    const usable = AREA.width - 2 * DEFAULT_STATE.outerGap - DEFAULT_STATE.gap;
-    assert.ok(Math.abs(rects[0].width / usable - 0.7) < 0.01,
-        `master got ${rects[0].width / usable}`);
-    // the stack shares one column
-    assert.equal(rects[1].x, rects[2].x);
-    assert.equal(rects[1].width, rects[2].width);
-});
-
-test('master-stack with one window uses the whole area', () => {
-    const [only] = computeLayout('master-stack', 1, AREA);
-    assert.equal(only.width, AREA.width - 2 * DEFAULT_STATE.outerGap);
 });
 
 test('ratios are honoured', () => {
@@ -184,6 +127,23 @@ test('absurdly small areas still produce usable rects', () => {
             }
         }
     }
+});
+
+test('a near-zero weight cannot make a slice overlap its neighbour', () => {
+    // Found by the fuzz test. A weight of ~0.0004 survives normalise() — it
+    // is positive — and produced a zero-width slice widened to 1px while the
+    // running edge stayed put, so the next slice started inside it. With
+    // gap 0 there was nothing to hide the overlap.
+    const rects = computeLayout('columns', 6,
+        {x: 0, y: 0, width: 1518, height: 829},
+        {gap: 0, outerGap: 7, ratios: [1.46, 2.92, 3.24, 3.46, 0.0004, 3.01]});
+    for (let i = 0; i < rects.length - 1; i++) {
+        assert.ok(rects[i].x + rects[i].width <= rects[i + 1].x,
+            `slice ${i} ends at ${rects[i].x + rects[i].width}, ` +
+            `slice ${i + 1} starts at ${rects[i + 1].x}`);
+    }
+    for (const r of rects)
+        assert.ok(r.width >= 1, 'every slice keeps a usable width');
 });
 
 test('layout is deterministic', () => {
@@ -224,17 +184,6 @@ test('resize clamps rather than collapsing a neighbour', () => {
     }
 });
 
-test('resizing master-stack adjusts the master ratio both ways', () => {
-    const grown = resizeToState('master-stack', 3, 0,
-        {width: 1400, height: 100, x: 0, y: 0}, AREA, DEFAULT_STATE);
-    assert.ok(grown.masterRatio > DEFAULT_STATE.masterRatio);
-    const shrunk = resizeToState('master-stack', 3, 0,
-        {width: 400, height: 100, x: 0, y: 0}, AREA, DEFAULT_STATE);
-    assert.ok(shrunk.masterRatio < DEFAULT_STATE.masterRatio);
-    for (const s of [grown, shrunk])
-        assert.ok(s.masterRatio >= 0.1 && s.masterRatio <= 0.9);
-});
-
 test('fuzz: invariants hold across random shapes', () => {
     // Deterministic PRNG so a failure is reproducible.
     let seed = 20260821;
@@ -252,7 +201,6 @@ test('fuzz: invariants hold across random shapes', () => {
         const state = {
             gap: Math.floor(rand() * 24),
             outerGap: Math.floor(rand() * 24),
-            masterRatio: 0.1 + rand() * 0.8,
             ratios: rand() < 0.5
                 ? Array.from({length: n}, () => rand() * 5) : null,
         };
@@ -265,12 +213,10 @@ test('fuzz: invariants hold across random shapes', () => {
             assert.ok(r.width >= 1 && r.height >= 1,
                 `${kind}/${n} iter ${iter}: degenerate ${JSON.stringify(r)}`);
         }
-        if (kind !== 'tabbed') {
-            for (let i = 0; i < rects.length; i++) {
-                for (let j = i + 1; j < rects.length; j++) {
-                    assert.ok(!overlaps(rects[i], rects[j]),
-                        `${kind}/${n} iter ${iter}: ${i} overlaps ${j}`);
-                }
+        for (let i = 0; i < rects.length; i++) {
+            for (let j = i + 1; j < rects.length; j++) {
+                assert.ok(!overlaps(rects[i], rects[j]),
+                    `${kind}/${n} iter ${iter}: ${i} overlaps ${j}`);
             }
         }
     }

@@ -18,18 +18,13 @@
 
 export const LAYOUTS = [
     'free',
-    'tabbed',
     'columns',
-    'rows',
-    'grid',
-    'master-stack',
 ];
 
 export const DEFAULT_STATE = {
     gap: 8,          // between tiles
     outerGap: 8,     // between tiles and the edge of the area
     ratios: null,    // relative weights per slot; null means equal
-    masterRatio: 0.6,
 };
 
 /** Smallest tile we will ever emit. Below this, windows are unusable and
@@ -88,27 +83,26 @@ function split(start, length, weights, gap) {
     let prevEdge = 0;
     for (let i = 0; i < n; i++) {
         acc += weights[i] / total;
-        const edge = i === n - 1 ? usable : Math.round(usable * acc);
-        out.push({
-            offset: start + prevEdge + i * gap,
-            size: Math.max(MIN_TILE, edge - prevEdge),
-        });
+        const raw = i === n - 1 ? usable : Math.round(usable * acc);
+
+        // Clamp the *edge*, not the size. Widening a too-thin slice while
+        // leaving the running edge where it was makes the next slice start
+        // inside this one — with a near-zero weight and no gap that is a
+        // visible overlap, and normalise() cannot catch it because 0.0004 is
+        // still a positive weight.
+        //
+        // The upper bound reserves MIN_TILE for each slice still to come.
+        // Since usable >= n * MIN_TILE by the check above, that bound is
+        // always at least prevEdge + MIN_TILE, so the two clamps never cross.
+        const remaining = n - 1 - i;
+        const edge = Math.min(
+            Math.max(raw, prevEdge + MIN_TILE),
+            usable - remaining * MIN_TILE);
+
+        out.push({offset: start + prevEdge + i * gap, size: edge - prevEdge});
         prevEdge = edge;
     }
     return out;
-}
-
-/** How many items go in each row of a grid of `n` items. */
-export function gridShape(n) {
-    if (n <= 0)
-        return [];
-    const cols = Math.ceil(Math.sqrt(n));
-    const rows = Math.ceil(n / cols);
-    const perRow = Array(rows).fill(Math.floor(n / rows));
-    let remainder = n % rows;
-    for (let i = 0; remainder > 0; i++, remainder--)
-        perRow[i]++;
-    return perRow;
 }
 
 function columns(n, area, state) {
@@ -118,56 +112,7 @@ function columns(n, area, state) {
     }));
 }
 
-function rows(n, area, state) {
-    const w = normalise(state.ratios, n);
-    return split(area.y, area.height, w, state.gap).map(s => ({
-        x: area.x, y: s.offset, width: area.width, height: s.size,
-    }));
-}
-
-function grid(n, area, state) {
-    const perRow = gridShape(n);
-    const bands = split(area.y, area.height, Array(perRow.length).fill(1), state.gap);
-    const out = [];
-    perRow.forEach((count, r) => {
-        const band = bands[r];
-        for (const s of split(area.x, area.width, Array(count).fill(1), state.gap)) {
-            out.push({
-                x: s.offset, y: band.offset,
-                width: s.size, height: band.size,
-            });
-        }
-    });
-    return out;
-}
-
-function masterStack(n, area, state) {
-    if (n === 1)
-        return [{...area}];
-
-    const ratio = Math.min(0.9, Math.max(0.1, state.masterRatio));
-    const [left, right] =
-        split(area.x, area.width, [ratio, 1 - ratio], state.gap);
-
-    const stackWeights = normalise(
-        state.ratios ? state.ratios.slice(1) : null, n - 1);
-    const stack = split(area.y, area.height, stackWeights, state.gap);
-
-    return [
-        {x: left.offset, y: area.y, width: left.size, height: area.height},
-        ...stack.map(s => ({
-            x: right.offset, y: s.offset, width: right.size, height: s.size,
-        })),
-    ];
-}
-
-const IMPLEMENTATIONS = {
-    tabbed: (n, area) => Array.from({length: n}, () => ({...area})),
-    columns,
-    rows,
-    grid,
-    'master-stack': masterStack,
-};
+const IMPLEMENTATIONS = {columns};
 
 /**
  * @param {string} kind one of LAYOUTS
@@ -207,18 +152,8 @@ export function resizeToState(kind, count, index, rect, area, state = {}) {
     const merged = {...DEFAULT_STATE, ...state};
     const inner = inset(area, merged.outerGap);
 
-    if (kind === 'master-stack' && count > 1) {
-        const usable = inner.width - merged.gap;
-        if (usable <= 0)
-            return merged;
-        const ratio = index === 0
-            ? rect.width / usable
-            : 1 - rect.width / usable;
-        return {...merged, masterRatio: Math.min(0.9, Math.max(0.1, ratio))};
-    }
-
-    if (kind === 'columns' || kind === 'rows') {
-        const along = kind === 'columns' ? 'width' : 'height';
+    if (kind === 'columns') {
+        const along = 'width';
         const current = normalise(merged.ratios, count);
         if (count < 2)
             return merged;

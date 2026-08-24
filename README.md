@@ -4,13 +4,13 @@
 
 A left sidebar of your open windows, organised into named, coloured groups —
 GNOME Shell's answer to Chrome's vertical tab groups. Each group decides for
-itself how its windows are arranged: left alone, tabbed, or tiled.
+itself how its windows are arranged: left alone, or tiled in columns.
 
 ![The sidebar showing three coloured groups beside a tiled desktop](docs/screenshot.png)
 
 - **Groups** with names and colours. Drag a window between them, drag a group
   header to reorder.
-- **Per-group layouts** — free, tabbed, columns, rows, grid, master + stack.
+- **Per-group layouts** — leave windows alone, or tile them in columns.
 - **Auto-hide** by default: the sidebar stays out of the way and slides in
   when you push the pointer at the left edge. Pin it if you'd rather it
   stayed.

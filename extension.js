@@ -77,24 +77,11 @@ const BUTTON_ICON_SIZE = 14;
 
 /** Arrangements a group can use. The geometry lives in layouts.js, which
  *  imports nothing from GNOME and is unit tested separately. */
-const ARRANGEMENTS = ['free', 'tabbed', 'columns', 'rows', 'grid', 'master-stack'];
-
-const ARRANGEMENT_ICON = {
-    'free': 'window-restore-symbolic',
-    'tabbed': 'view-paged-symbolic',
-    'columns': 'view-dual-symbolic',
-    'rows': 'view-continuous-symbolic',
-    'grid': 'view-grid-symbolic',
-    'master-stack': 'view-list-symbolic',
-};
+const ARRANGEMENTS = ['free', 'columns'];
 
 const ARRANGEMENT_LABEL = {
     'free': 'Free',
-    'tabbed': 'Tabbed',
     'columns': 'Columns',
-    'rows': 'Rows',
-    'grid': 'Grid',
-    'master-stack': 'Master + stack',
 };
 
 /** Group colours, modelled on Chrome's tab groups, grey first as its default. */
@@ -826,6 +813,12 @@ class GroupSection extends St.BoxLayout {
                 this._model.setArrangement(this._index, kind);
                 // Stale ratios belong to the previous layout's slot count.
                 this._model.setLayoutState(this._index, {});
+                // Switch to the group as well. Rearranging windows you cannot
+                // see is indistinguishable from the menu doing nothing, which
+                // is exactly how it was reported.
+                if (this._index !== this._model.activeIndex)
+                    this._model.workspace(this._index)?.activate(
+                        global.get_current_time());
                 this._sidebar.relayout(this._index);
                 this._sidebar.queueRebuild();
             });

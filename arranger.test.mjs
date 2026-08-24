@@ -84,7 +84,7 @@ test('each monitor is laid out against its own work area', () => {
 
 test('a monitor with no work area is skipped, not crashed on', () => {
     const w = win({monitor: 3});
-    const {arranger} = setup({groups: [{arrangement: 'grid', windows: [w]}]});
+    const {arranger} = setup({groups: [{arrangement: 'columns', windows: [w]}]});
     assert.doesNotThrow(() => arranger.apply(0));
     assert.equal(w.moves.length, 0);
 });
@@ -112,7 +112,7 @@ test('a maximized window is unmaximized before being placed', () => {
 
 test('a window already in place is not moved again', () => {
     const w = win();
-    const {arranger} = setup({groups: [{arrangement: 'tabbed', windows: [w]}]});
+    const {arranger} = setup({groups: [{arrangement: 'columns', windows: [w]}]});
     arranger.apply(0);
     assert.equal(w.moves.length, 1);
     arranger.apply(0);
@@ -134,34 +134,6 @@ test('a client that refuses to shrink does not cause a correction loop', () => {
     assert.equal(widths.size, 1, 'the requested width should never change');
 });
 
-/* ---- tabbed ----------------------------------------------------------- */
-
-test('tabbed gives every window the same rect and raises the focused one', () => {
-    const a = win();
-    const b = win();
-    const {arranger} = setup({
-        groups: [{arrangement: 'tabbed', windows: [a, b]}],
-        focusWindow: b,
-    });
-    arranger.apply(0);
-    assert.deepEqual(a.lastRequest, b.lastRequest);
-    assert.equal(b.raiseCount, 1);
-    assert.equal(a.raiseCount, 0);
-});
-
-test('a focused window in another group is not raised', () => {
-    const a = win({workspace: 0});
-    const elsewhere = win({workspace: 1});
-    const {arranger} = setup({
-        groups: [{arrangement: 'tabbed', windows: [a]}, {arrangement: 'free'}],
-        focusWindow: elsewhere,
-    });
-    arranger.apply(0);
-    assert.equal(elsewhere.raiseCount, 0);
-});
-
-/* ---- restore ---------------------------------------------------------- */
-
 test('switching back to free restores the pre-tile geometry', () => {
     const w = win({frame: {x: 100, y: 200, width: 640, height: 480}});
     const {model, arranger} = setup({
@@ -178,7 +150,7 @@ test('switching back to free restores the pre-tile geometry', () => {
 test('a window that was maximized is re-maximized, not restored to a rect', () => {
     const w = win({maximized: true});
     const {model, arranger} = setup({
-        groups: [{arrangement: 'grid', windows: [w]}],
+        groups: [{arrangement: 'columns', windows: [w]}],
     });
     arranger.apply(0);
     model.groups[0].arrangement = 'free';
@@ -189,7 +161,7 @@ test('a window that was maximized is re-maximized, not restored to a rect', () =
 
 test('restoring twice does nothing the second time', () => {
     const w = win();
-    const {model, arranger} = setup({groups: [{arrangement: 'rows', windows: [w]}]});
+    const {model, arranger} = setup({groups: [{arrangement: 'columns', windows: [w]}]});
     arranger.apply(0);
     model.groups[0].arrangement = 'free';
     arranger.apply(0);
@@ -217,7 +189,7 @@ test('forget is safe for a window that was never tiled', () => {
 
 test('destroy releases the stash', () => {
     const w = win();
-    const {arranger} = setup({groups: [{arrangement: 'grid', windows: [w]}]});
+    const {arranger} = setup({groups: [{arrangement: 'columns', windows: [w]}]});
     arranger.apply(0);
     arranger.destroy();
     assert.equal(arranger.hasStash(w), false);
@@ -287,7 +259,7 @@ test('resizing a tiled column rewrites the ratios', () => {
 });
 
 test('layouts with no adjustable axis refuse the resize', () => {
-    for (const kind of ['free', 'tabbed', 'grid']) {
+    for (const kind of ['free']) {
         const a = win();
         const b = win();
         const {model, arranger} = setup({groups: [{arrangement: kind, windows: [a, b]}]});
@@ -305,9 +277,9 @@ test('a lone window on a monitor has nothing to trade against', () => {
 test('absorbing a resize schedules exactly one relayout', () => {
     const a = win();
     const b = win();
-    const {env, arranger} = setup({groups: [{arrangement: 'rows', windows: [a, b]}]});
+    const {env, arranger} = setup({groups: [{arrangement: 'columns', windows: [a, b]}]});
     arranger.apply(0);
-    a.frame = {...a.frame, height: a.frame.height + 200};
+    a.frame = {...a.frame, width: a.frame.width + 200};
     arranger.absorbResize(a);
     assert.equal(env.deferCount, 1);
 });

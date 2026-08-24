@@ -18,7 +18,7 @@
 import {computeLayout, resizeToState} from './layouts.js';
 
 /** Layouts with no adjustable axis: a drag-resize cannot be absorbed. */
-const RIGID_LAYOUTS = new Set(['free', 'tabbed', 'grid']);
+const RIGID_LAYOUTS = new Set(['free']);
 
 export class Arranger {
     /**
@@ -121,12 +121,6 @@ export class Arranger {
             if (!rects)
                 continue;
             windows.forEach((win, i) => this._place(win, rects[i]));
-        }
-
-        if (kind === 'tabbed') {
-            const focus = this._env.getFocusWindow();
-            if (focus && focus.get_workspace()?.index() === index)
-                focus.raise();
         }
     }
 
