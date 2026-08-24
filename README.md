@@ -493,3 +493,8 @@ way that looks like a code bug. `gnome-extensions info` reports
 `run-lxd.sh` disables idle blanking, locking and suspend at setup and unlocks
 before `demo` and `console`, but a VM resumed from an older state can still
 come back locked.
+
+## Licence
+
+GPL-3.0-or-later. The full text is in `LICENSE`; each source file carries an
+SPDX header.
