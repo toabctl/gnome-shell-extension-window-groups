@@ -66,7 +66,14 @@ export class FakeWindow {
     }
 
     allows_resize() {
-        return this.resizable;
+        // Mutter answers this about the window as it stands, and a maximized
+        // window is not resizable until it is restored. Measured in a real
+        // shell: maximized windows report allows_resize() false and
+        // allows_move() true. The fake used to return `resizable` regardless,
+        // which is how the arranger came to silently skip every maximized
+        // window with a green suite.
+        return this.resizable &&
+            !this.maximized_horizontally && !this.maximized_vertically;
     }
 
     allows_move() {

@@ -4,7 +4,7 @@ Four tiers, in descending order of how much you should trust a green result
 and ascending order of what it costs to run.
 
 ```sh
-make check        # tiers 1–2: lint, schema, 80 unit tests, 29 mutants (~7s)
+make check        # tiers 1–2: lint, schema, 82 unit tests, 30 mutants (~7s)
 make integration  # tier 3: 31 assertions against a real shell in a VM
 ```
 
@@ -77,6 +77,21 @@ Extracting `Arranger` also surfaced a live bug the first fakes were too
 permissive to catch: it called `win.unmaximize()` with no arguments, which the
 real `Meta.Window` rejects. The flags now travel through `env`, pinned by both
 a test and a mutant.
+
+A permissive fake did it again later, and this one reached users. `FakeWindow`
+answered `allows_resize()` from its own `resizable` flag, while Mutter answers
+about the window as it stands and returns false for anything maximized —
+measured, not assumed, through the debug interface. `tileable()` therefore
+rejected every maximized window before the code that unmaximizes it could run,
+so choosing an arrangement did nothing at all for the windows most people
+actually have. Making the fake tell the truth turned two existing tests red on
+the spot.
+
+The rule this suggests: when a fake stands in for an API, the interesting
+question is not whether it returns a plausible value, but whether it is
+capable of returning the *awkward* one the real thing returns.
+GetState now reports `maximized`, `allowsResize` and `allowsMove` per window,
+so "why was this one not tiled?" is answerable from outside.
 
 A GJS exception is not a crash: the shell abandons the callback that threw and
 carries on. So the suite also fails on `already disposed` or `JS ERROR` in the

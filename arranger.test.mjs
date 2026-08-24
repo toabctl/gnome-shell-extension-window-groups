@@ -47,6 +47,35 @@ test('windows that must not be moved are excluded', () => {
     }
 });
 
+test('a maximized window is tiled, not skipped for being unresizable', () => {
+    // Mutter reports allows_resize() false while a window is maximized, and
+    // the arranger unmaximizes before placing. Judging tileability on the
+    // window as it stands meant maximized windows silently declined to tile
+    // -- in a real session that is most of them, and the group looked as
+    // though the arrangement had done nothing at all.
+    const a = win({maximized: true});
+    const b = win({maximized: true});
+    const {arranger} = setup({
+        groups: [{arrangement: 'columns', windows: [a, b]}],
+    });
+    arranger.apply(0);
+    assert.equal(a.moves.length, 1, 'the first window should have been placed');
+    assert.equal(b.moves.length, 1, 'the second window should have been placed');
+    assert.notEqual(a.moves.at(-1).width, b.moves.at(-1).width + 10000);
+    assert.ok(a.moves.at(-1).x < b.moves.at(-1).x, 'they should sit side by side');
+});
+
+test('a window that is merely unresizable is still skipped', () => {
+    // The counterpart to the case above: not maximized and not resizable is a
+    // window Mutter will never let us size, such as a fixed-size wizard.
+    const fixed = win({resizable: false});
+    const {arranger} = setup({
+        groups: [{arrangement: 'columns', windows: [fixed]}],
+    });
+    arranger.apply(0);
+    assert.equal(fixed.moves.length, 0);
+});
+
 test('an excluded window does not take up a layout slot', () => {
     // Otherwise the tiled windows get laid out for n+1 and leave a hole.
     const ok1 = win();

@@ -155,7 +155,7 @@ restart. i3 and sway only offer rule-based `assign` for the same reason.
 ## Development
 
 ```sh
-make check        # lint, schema, 80 unit tests, 29 mutants — ~7s, no VM
+make check        # lint, schema, 82 unit tests, 30 mutants — ~7s, no VM
 make integration  # 31 assertions against a real shell in a VM
 ```
 
@@ -164,7 +164,7 @@ Four modules import nothing from GNOME and are unit tested: `layouts.js`
 `arranger.js` (applying a layout, with the shell injected). `shell-stubs.mjs`
 gives the last one fake windows and monitors.
 
-`node mutants.mjs` breaks the implementation 29 ways and requires each break to
+`node mutants.mjs` breaks the implementation 30 ways and requires each break to
 fail a test. This is not decoration — two suites here were green with the
 behaviour they named deliberately deleted.
 

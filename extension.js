@@ -758,6 +758,12 @@ class GroupSection extends St.BoxLayout {
         this._model.setArrangement(this._index, kind);
         // Stale ratios belong to the previous layout's slot count.
         this._model.setLayoutState(this._index, {});
+        // Switch to the group first, so the retile happens in front of you.
+        // Retiling a group you are not looking at is a change you have to go
+        // and verify, and the point of a toggle is that you see the result.
+        if (this._index !== this._model.activeIndex)
+            this._model.workspace(this._index)?.activate(
+                global.get_current_time());
         this._sidebar.relayout(this._index);
         this._sidebar.queueRebuild();
     }
@@ -2023,6 +2029,13 @@ class DebugInterface {
                     wmClass: win.get_wm_class() ?? '',
                     monitor: win.get_monitor(),
                     tag: this._tags?.tag(win) ?? '',
+                    // Why a window did or did not get tiled is otherwise
+                    // invisible from outside: these are the predicates the
+                    // arranger filters on.
+                    maximized: win.maximized_horizontally ||
+                        win.maximized_vertically,
+                    allowsResize: win.allows_resize(),
+                    allowsMove: win.allows_move(),
                     frame: (({x, y, width, height}) =>
                         ({x, y, width, height}))(win.get_frame_rect()),
                 })),

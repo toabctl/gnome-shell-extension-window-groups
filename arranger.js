@@ -79,11 +79,19 @@ export class Arranger {
     /** Windows a layout may place. Everything excluded here would either
      *  fight us or be actively wrong to move. */
     tileable(win) {
+        // A maximized window reports allows_resize() false -- Mutter is
+        // answering about the window as it stands, and it is not resizable
+        // until it is restored. We unmaximize before placing anything, so ask
+        // about the window we will actually be moving. Testing it as-is meant
+        // every maximized window quietly declined to tile, which is most of
+        // the windows most people have.
+        const maximized =
+            win.maximized_horizontally || win.maximized_vertically;
         return this._env.isManaged(win) &&
             !win.minimized &&
             !win.is_fullscreen() &&
             !win.is_on_all_workspaces() &&
-            win.allows_resize() &&
+            (maximized || win.allows_resize()) &&
             win.allows_move();
     }
 
