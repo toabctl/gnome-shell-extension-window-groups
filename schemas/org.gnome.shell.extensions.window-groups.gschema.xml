@@ -52,6 +52,31 @@
       <default>6</default>
       <summary>Gap between the sidebar and the screen edges, in logical pixels</summary>
     </key>
+    <key name="switch-group-up" type="as">
+      <default><![CDATA[['<Super><Control>Up']]]></default>
+      <summary>Switch to the group above</summary>
+    </key>
+    <key name="switch-group-down" type="as">
+      <default><![CDATA[['<Super><Control>Down']]]></default>
+      <summary>Switch to the group below</summary>
+    </key>
+    <key name="move-window-up" type="as">
+      <default><![CDATA[['<Super><Alt><Shift>Up']]]></default>
+      <summary>Move the focused window to the group above and follow it</summary>
+    </key>
+    <key name="move-window-down" type="as">
+      <default><![CDATA[['<Super><Alt><Shift>Down']]]></default>
+      <summary>Move the focused window to the group below and follow it</summary>
+    </key>
+    <key name="reveal-dwell" type="i">
+      <default>250</default>
+      <summary>How long the pointer must rest at the screen edge before the sidebar reveals, in milliseconds</summary>
+    </key>
+    <key name="reveal-commit" type="i">
+      <default>1500</default>
+      <summary>How long you have to move onto a revealed sidebar before it hides again, in milliseconds</summary>
+      <description>Raise this if reaching the sidebar in time is difficult.</description>
+    </key>
     <key name="compact" type="b">
       <default>false</default>
       <summary>Shrink the sidebar to icons only, like Chrome's collapsed vertical tabs</summary>

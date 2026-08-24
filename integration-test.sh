@@ -206,6 +206,24 @@ else
 fi
 
 echo
+echo "keyboard"
+gnome_setting org.gnome.desktop.wm.preferences num-workspaces 3 >/dev/null 2>&1
+pointer key super+ctrl+up; pointer key super+ctrl+up   # settle at the top
+before_active=$(field "d['activeGroup']")
+check "starts at the first group" "0" "$before_active"
+pointer key super+ctrl+down
+sleep 1
+check "switch-group-down moves down one" "1" "$(field "d['activeGroup']")"
+pointer key super+ctrl+up
+sleep 1
+check "switch-group-up moves back" "0" "$(field "d['activeGroup']")"
+# Clamped, not wrapped: repeated presses at the end must not jump to the far
+# side of the list.
+pointer key super+ctrl+up
+sleep 1
+check "does not wrap past the first group" "0" "$(field "d['activeGroup']")"
+
+echo
 echo "compact"
 pointer move 1400,700
 setting auto-hide false >/dev/null 2>&1

@@ -108,6 +108,14 @@ export default class WindowGroupsPreferences extends ExtensionPreferences {
         motion.add(spinRow(settings, 'hide-delay', _('Hide delay'),
             _('How long the sidebar waits after the pointer leaves'),
             0, 5000, 50));
+        motion.add(spinRow(settings, 'reveal-dwell', _('Reveal dwell'),
+            _('How long the pointer must rest at the screen edge'),
+            0, 2000, 50));
+        motion.add(spinRow(settings, 'reveal-commit', _('Reveal grace'),
+            _('How long you have to move onto a revealed sidebar before it '
+              + 'hides again. Raise it if reaching the sidebar in time is '
+              + 'difficult.'),
+            300, 10000, 250));
         page.add(motion);
 
         return page;
@@ -143,6 +151,23 @@ export default class WindowGroupsPreferences extends ExtensionPreferences {
             _('Tagging a window moves it into the group of that name, ' +
               'creating the group if needed')));
         page.add(groups);
+
+        const keys = new Adw.PreferencesGroup({
+            title: _('Keyboard'),
+            description: _('Change these with dconf-editor under '
+                + '/org/gnome/shell/extensions/window-groups/'),
+        });
+        for (const [key, title] of [
+            ['search-windows', _('Search windows')],
+            ['switch-group-up', _('Switch to the group above')],
+            ['switch-group-down', _('Switch to the group below')],
+            ['move-window-up', _('Move window to the group above')],
+            ['move-window-down', _('Move window to the group below')],
+        ]) {
+            const accel = settings.get_strv(key)[0] ?? _('unset');
+            keys.add(new Adw.ActionRow({title, subtitle: accel}));
+        }
+        page.add(keys);
 
         const developer = new Adw.PreferencesGroup({
             title: _('Developer'),

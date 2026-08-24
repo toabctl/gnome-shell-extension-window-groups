@@ -29,6 +29,7 @@ import {
 } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as DND from 'resource:///org/gnome/shell/ui/dnd.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 import {computeLayout, resizeToState} from './layouts.js';
 import {rankWindows} from './search.js';
@@ -44,8 +45,6 @@ const ROW_ANIMATION = 160;
 const TOOLTIP_DELAY = 450;
 const HOVER_EXPAND_DELAY = 180;
 const HOVER_COLLAPSE_DELAY = 300;
-const EDGE_DWELL = 250;
-const REVEAL_COMMIT = 1500;
 const REVEAL_POLL = 300;
 /** Animation length, honouring the desktop's reduce-motion preference and
  *  GNOME's own slow-down factor — hold Shift in the overview and everything
@@ -515,12 +514,16 @@ class WindowRow extends St.Button {
         }
 
         this._draggable = DND.makeDraggable(this, {dragActorOpacity: 200});
-        this._draggable.connect('drag-begin',
-            () => this.add_style_class_name('wg-dragging'));
-        this._draggable.connect('drag-end',
-            () => this.remove_style_class_name('wg-dragging'));
-        this._draggable.connect('drag-cancelled',
-            () => this.remove_style_class_name('wg-dragging'));
+        this._draggable.connect('drag-begin', () => {
+            this._sidebar?.beginBusy();
+            this.add_style_class_name('wg-dragging');
+        });
+        const dragDone = () => {
+            this._sidebar?.endBusy();
+            this.remove_style_class_name('wg-dragging');
+        };
+        this._draggable.connect('drag-end', dragDone);
+        this._draggable.connect('drag-cancelled', dragDone);
 
         this.connect('clicked', () => this._win.activate(global.get_current_time()));
         this.connect('button-press-event', (actor, event) => {
@@ -545,11 +548,17 @@ class WindowRow extends St.Button {
         this._label.hide();
         this._box.insert_child_at_index(entry, 1);
 
+        this._sidebar.beginBusy();
+        let finished = false;
         const finish = commit => {
+            if (finished)
+                return;
+            finished = true;
             if (commit) {
                 tags.setTag(this._win, entry.get_text());
                 this._sidebar.applyTag(this._win);
             }
+            this._sidebar.endBusy();
             this._sidebar.queueRebuild();
         };
 
@@ -675,47 +684,20 @@ class GroupSection extends St.BoxLayout {
             () => this._model.workspace(this._index)?.activate(global.get_current_time()));
         this._nameButton.connect('button-press-event', (actor, event) => {
             if (event.get_button() === Clutter.BUTTON_SECONDARY) {
-                this._beginRename();
+                this._openMenu();
                 return Clutter.EVENT_STOP;
             }
             return Clutter.EVENT_PROPAGATE;
         });
         header.add_child(this._nameButton);
 
-        const arrangement = this._model.arrangement(this._index);
-        const nextArrangement = ARRANGEMENTS[
-            (ARRANGEMENTS.indexOf(arrangement) + 1) % ARRANGEMENTS.length];
-        this._arrangeButton = iconButton(
-            ARRANGEMENT_ICON[arrangement],
-            `How this group's windows are arranged: ${ARRANGEMENT_LABEL[arrangement]}` +
-            ` — click for ${ARRANGEMENT_LABEL[nextArrangement]}`);
-        this._colorButton = iconButton('color-select-symbolic',
-            `Group colour: ${color.name} — click for the next one`,
-            'wg-icon-button');
-        this._colorButton.get_child().style = `color: ${ink};`;
-        this._colorButton.connect('clicked', () => {
-            this._model.cycleColor(this._index);
-            this._sidebar.queueRebuild();
-        });
-        header.add_child(this._colorButton);
-
-        this._arrangeButton.connect('clicked', () => {
-            this._model.cycleArrangement(this._index);
-            // A fresh layout wants fresh ratios; stale ones belong to the
-            // previous arrangement's slot count.
-            this._model.setLayoutState(this._index, {});
-            this._sidebar.relayout(this._index);
-            this._sidebar.queueRebuild();
-        });
-        this._arrangeButton.get_child().style = `color: ${ink};`;
-        header.add_child(this._arrangeButton);
-
-        const remove = iconButton('window-close-symbolic',
-            _('Dissolve this group; its windows move to Ungrouped'));
-        remove.connect('clicked', () => this._model.removeGroup(this._index));
-        remove.reactive = this._model.count > 1;
-        remove.get_child().style = `color: ${ink};`;
-        header.add_child(remove);
+        // One visible affordance for the whole menu. Right-clicking works
+        // too, but an interaction with no affordance is one nobody finds.
+        this._menuButton = iconButton('view-more-symbolic',
+            _('Group options'), 'wg-icon-button');
+        this._menuButton.get_child().style = `color: ${ink};`;
+        this._menuButton.connect('clicked', () => this._openMenu());
+        header.add_child(this._menuButton);
 
         // Drag the header to reorder groups. The delegate is the section so
         // a drop target receives something it can identify; the header has no
@@ -723,12 +705,16 @@ class GroupSection extends St.BoxLayout {
         header._delegate = this;
         header.reactive = true;
         this._headerDraggable = DND.makeDraggable(header, {dragActorOpacity: 200});
-        this._headerDraggable.connect('drag-begin',
-            () => this.add_style_class_name('wg-dragging'));
-        this._headerDraggable.connect('drag-end',
-            () => this.remove_style_class_name('wg-dragging'));
-        this._headerDraggable.connect('drag-cancelled',
-            () => this.remove_style_class_name('wg-dragging'));
+        this._headerDraggable.connect('drag-begin', () => {
+            this._sidebar?.beginBusy();
+            this.add_style_class_name('wg-dragging');
+        });
+        const headerDragDone = () => {
+            this._sidebar?.endBusy();
+            this.remove_style_class_name('wg-dragging');
+        };
+        this._headerDraggable.connect('drag-end', headerDragDone);
+        this._headerDraggable.connect('drag-cancelled', headerDragDone);
 
         this._header = header;
     }
@@ -757,15 +743,23 @@ class GroupSection extends St.BoxLayout {
 
         header._delegate = this;
         this._headerDraggable = DND.makeDraggable(header, {dragActorOpacity: 200});
-        this._headerDraggable.connect('drag-begin',
-            () => this.add_style_class_name('wg-dragging'));
-        this._headerDraggable.connect('drag-end',
-            () => this.remove_style_class_name('wg-dragging'));
-        this._headerDraggable.connect('drag-cancelled',
-            () => this.remove_style_class_name('wg-dragging'));
+        this._headerDraggable.connect('drag-begin', () => {
+            this._sidebar?.beginBusy();
+            this.add_style_class_name('wg-dragging');
+        });
+        const headerDragDone = () => {
+            this._sidebar?.endBusy();
+            this.remove_style_class_name('wg-dragging');
+        };
+        this._headerDraggable.connect('drag-end', headerDragDone);
+        this._headerDraggable.connect('drag-cancelled', headerDragDone);
 
         this.add_child(header);
         this._header = header;
+    }
+
+    on_destroy() {
+        this._closeMenu();
     }
 
     getDragActor() {
@@ -779,6 +773,95 @@ class GroupSection extends St.BoxLayout {
         return this._header;
     }
 
+    /** Everything persistent about a group lives here rather than as icons on
+     *  a strip that appears on hover and leaves on a timer. Dissolving is
+     *  irreversible and rename is multi-step; neither belongs one pixel from
+     *  a control you click in passing. A menu also replaces two blind cycles
+     *  with labelled choices you can see before committing to. */
+    _openMenu() {
+        this._closeMenu();
+
+        const menu = new PopupMenu.PopupMenu(
+            this._menuButton ?? this._nameButton, 0.0, St.Side.LEFT);
+        this._menu = menu;
+        Main.uiGroup.add_child(menu.actor);
+        menu.actor.hide();
+
+        // The sidebar must not slide away underneath its own menu.
+        this._sidebar.beginBusy();
+        this._sidebar.holdOpen(true);
+
+        const rename = new PopupMenu.PopupMenuItem(_('Rename…'));
+        rename.connect('activate', () => this._beginRename());
+        menu.addMenuItem(rename);
+
+        const colors = new PopupMenu.PopupSubMenuMenuItem(
+            _('Colour: %s').format(this._model.color(this._index).name));
+        for (const entry of GROUP_COLORS) {
+            const item = new PopupMenu.PopupMenuItem(entry.name);
+            const dot = new St.Widget({
+                style_class: 'wg-menu-dot',
+                y_align: Clutter.ActorAlign.CENTER,
+            });
+            dot.style = `background-color: ${entry.hex};`;
+            item.insert_child_at_index(dot, 1);
+            if (entry.name === this._model.color(this._index).name)
+                item.setOrnament(PopupMenu.Ornament.DOT);
+            item.connect('activate', () => {
+                this._model.setColor(this._index, entry.name);
+                this._sidebar.queueRebuild();
+            });
+            colors.menu.addMenuItem(item);
+        }
+        menu.addMenuItem(colors);
+
+        const layouts = new PopupMenu.PopupSubMenuMenuItem(
+            _('Arrangement: %s').format(
+                ARRANGEMENT_LABEL[this._model.arrangement(this._index)]));
+        for (const kind of ARRANGEMENTS) {
+            const item = new PopupMenu.PopupMenuItem(ARRANGEMENT_LABEL[kind]);
+            if (kind === this._model.arrangement(this._index))
+                item.setOrnament(PopupMenu.Ornament.DOT);
+            item.connect('activate', () => {
+                this._model.setArrangement(this._index, kind);
+                // Stale ratios belong to the previous layout's slot count.
+                this._model.setLayoutState(this._index, {});
+                this._sidebar.relayout(this._index);
+                this._sidebar.queueRebuild();
+            });
+            layouts.menu.addMenuItem(item);
+        }
+        menu.addMenuItem(layouts);
+
+        menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        const count = this._model.windows(this._index).length;
+        const dissolve = new PopupMenu.PopupMenuItem(
+            count === 0
+                ? _('Dissolve group')
+                : _('Dissolve group (%d windows move to Ungrouped)').format(count));
+        dissolve.setSensitive(this._model.count > 1);
+        dissolve.connect('activate', () => this._model.removeGroup(this._index));
+        menu.addMenuItem(dissolve);
+
+        menu.connect('open-state-changed', (_m, open) => {
+            if (open)
+                return;
+            this._sidebar.holdOpen(false);
+            this._sidebar.endBusy();
+            this._closeMenu();
+        });
+        menu.open(true);
+    }
+
+    _closeMenu() {
+        if (!this._menu)
+            return;
+        const menu = this._menu;
+        this._menu = null;
+        menu.actor.destroy();
+    }
+
     _beginRename() {
         const entry = new St.Entry({
             style_class: 'wg-rename-entry',
@@ -789,9 +872,15 @@ class GroupSection extends St.BoxLayout {
         this._header.remove_child(this._nameButton);
         this._header.insert_child_at_index(entry, position);
 
+        this._sidebar.beginBusy();
+        let finished = false;
         const finish = commit => {
+            if (finished)
+                return;
+            finished = true;
             if (commit)
                 this._model.setName(this._index, entry.get_text());
+            this._sidebar.endBusy();
             this._sidebar.queueRebuild();
         };
 
@@ -931,12 +1020,9 @@ class SearchResult extends St.Button {
         text.add_child(sub);
         box.add_child(text);
 
-        const close = new St.Button({
-            style_class: 'wg-search-close',
-            child: new St.Icon({icon_name: 'window-close-symbolic', icon_size: 14}),
-        });
-        close.connect('clicked', () => entry.win.delete(global.get_current_time()));
-        box.add_child(close);
+        // No close button. It sat a few pixels from the activate target,
+        // offered no undo for an application that might hold unsaved work,
+        // and left a row behind pointing at a window that no longer exists.
     }
 
     setSelected(selected) {
@@ -1152,6 +1238,10 @@ class Sidebar {
         // Windows already drawn at least once, so a rebuild does not replay
         // the entry animation for the whole list.
         this._seenWindows = new WeakSet();
+        this._rowsByWindow = new Map();
+        this._busy = 0;
+        this._rebuildDeferred = false;
+        this._held = false;
 
         this.actor = new St.BoxLayout({
             orientation: Clutter.Orientation.VERTICAL,
@@ -1329,7 +1419,8 @@ class Sidebar {
             if (this._edgeDwellId)
                 GLib.source_remove(this._edgeDwellId);
             this._edgeDwellId = GLib.timeout_add(
-                GLib.PRIORITY_DEFAULT, EDGE_DWELL, () => {
+                GLib.PRIORITY_DEFAULT,
+                Math.max(0, this._settings.get_int('reveal-dwell')), () => {
                     this._edgeDwellId = 0;
         this._revealGuardId = 0;
                     if (this._edge?.hover)
@@ -1433,7 +1524,7 @@ class Sidebar {
                     this._revealGuardId = 0;
                     return GLib.SOURCE_REMOVE;
                 }
-                if (this.actor.hover) {
+                if (this.actor.hover || this._held) {
                     this._reachedSidebar = true;
                     return GLib.SOURCE_CONTINUE;
                 }
@@ -1444,7 +1535,7 @@ class Sidebar {
                 }
                 const elapsed =
                     (GLib.get_monotonic_time() - this._revealedAt) / 1000;
-                if (elapsed > REVEAL_COMMIT) {
+                if (elapsed > this._settings.get_int('reveal-commit')) {
                     this._revealGuardId = 0;
                     this._hide();
                     return GLib.SOURCE_REMOVE;
@@ -1507,14 +1598,23 @@ class Sidebar {
         });
     }
 
+    /** Pin the sidebar open regardless of the pointer, for as long as
+     *  something modal-ish is attached to it. */
+    holdOpen(held) {
+        this._held = held;
+        if (held)
+            this._cancelHide();
+    }
+
     _queueHide() {
         this._cancelHide();
         this._hideTimeoutId = GLib.timeout_add(
             GLib.PRIORITY_DEFAULT,
             Math.max(0, this._settings.get_int('hide-delay')), () => {
                 this._hideTimeoutId = 0;
-                // Do not slide out from under a pointer that came back.
-                if (!this.actor.hover)
+                // Do not slide out from under a pointer that came back, nor
+                // from under an open menu.
+                if (!this.actor.hover && !this._held)
                     this._hide();
                 return GLib.SOURCE_REMOVE;
             });
@@ -1711,6 +1811,33 @@ class Sidebar {
         }
     }
 
+    /** Hold off structural rebuilds while the user is mid-gesture. Balanced
+     *  by endBusy(); nested holds are counted rather than flagged, since a
+     *  drag can start while an entry is open. */
+    beginBusy() {
+        this._busy = (this._busy ?? 0) + 1;
+    }
+
+    endBusy() {
+        this._busy = Math.max(0, (this._busy ?? 0) - 1);
+        if (this._busy === 0 && this._rebuildDeferred)
+            this.queueRebuild();
+    }
+
+    /** One window's title changed. Retitling is constant — a browser tab, a
+     *  terminal's cwd — so it updates that row rather than rebuilding the
+     *  list around it. */
+    updateTitle(win) {
+        this._rowsByWindow?.get(win)?.updateTitle();
+    }
+
+    /** Focus moved. Only the styling of at most two rows changes. */
+    updateFocus() {
+        const focus = global.display.focus_window;
+        for (const [win, row] of this._rowsByWindow ?? [])
+            row.setFocused(win === focus);
+    }
+
     queueRebuild() {
         if (this._rebuildId)
             return;
@@ -1722,8 +1849,20 @@ class Sidebar {
     }
 
     rebuild() {
+        // A rebuild in the middle of a rename, a tag edit or a drag destroys
+        // the actor the user is working in. Defer until they are finished:
+        // any window retitling — a browser tab, a terminal's cwd, a clock —
+        // used to be enough to eat what they had typed or drop what they
+        // were dragging.
+        if (this._busy > 0) {
+            this._rebuildDeferred = true;
+            return;
+        }
+        this._rebuildDeferred = false;
+
         this._groupBox.destroy_all_children();
         this._sections = [];
+        this._rowsByWindow = new Map();
 
         const focus = global.display.focus_window;
 
@@ -1734,7 +1873,8 @@ class Sidebar {
 
             for (const win of this._model.windows(i)) {
                 const isNew = !this._seenWindows.has(win);
-                section.addWindow(win, win === focus, isNew);
+                const row = section.addWindow(win, win === focus, isNew);
+                this._rowsByWindow.set(win, row);
                 this._seenWindows.add(win);
                 this._trackWindow(win);
             }
@@ -1751,7 +1891,7 @@ class Sidebar {
             return;
         this._trackedWindows.add(win);
         win.connectObject(
-            'notify::title', () => this.queueRebuild(),
+            'notify::title', () => this.updateTitle(win),
             'notify::minimized', () => {
                 this.relayout(win.get_workspace()?.index());
                 this.queueRebuild();
@@ -1935,6 +2075,26 @@ export default class WindowGroupsExtension extends Extension {
             Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW,
             () => this._search.toggle());
 
+        // Until now the only way to reach a group was the pointer, which for
+        // something with tiling layouts is the wrong primary interface.
+        for (const [key, handler] of [
+            ['switch-group-up', () => this._switchGroup(-1)],
+            ['switch-group-down', () => this._switchGroup(1)],
+            ['move-window-up', () => this._moveFocusedWindow(-1)],
+            ['move-window-down', () => this._moveFocusedWindow(1)],
+        ]) {
+            const action = Main.wm.addKeybinding(key, this._settings,
+                Meta.KeyBindingFlags.NONE, Shell.ActionMode.NORMAL, handler);
+            // A collision returns NONE and binds nothing. Silently, which
+            // makes it indistinguishable from a broken handler: the default
+            // for switching groups was <Super><Alt>Up/Down until that turned
+            // out to be GNOME's own shift-overview.
+            if (action === Meta.KeyBindingAction.NONE) {
+                log(`window-groups: could not bind ${key} to ` +
+                    `${this._settings.get_strv(key)[0]} — already in use`);
+            }
+        }
+
         global.display.connectObject(
             'window-created', (display, win) => {
                 if (!isManagedWindow(win))
@@ -1950,7 +2110,7 @@ export default class WindowGroupsExtension extends Extension {
                 }
                 this._sidebar.queueRebuild();
             },
-            'notify::focus-window', () => this._sidebar.queueRebuild(),
+            'notify::focus-window', () => this._sidebar.updateFocus(),
             'grab-op-end', (display, win, op) => {
                 if (!win)
                     return;
@@ -2042,6 +2202,43 @@ export default class WindowGroupsExtension extends Extension {
             this);
     }
 
+    /** Adjacent group, clamped rather than wrapped: wrapping from the last
+     *  group to the first on a repeated keypress is disorienting when the
+     *  list is the visible model of where you are. */
+    _adjacentGroup(delta) {
+        const target = this._model.activeIndex + delta;
+        if (target < 0 || target >= this._model.count)
+            return -1;
+        return target;
+    }
+
+    _switchGroup(delta) {
+        const target = this._adjacentGroup(delta);
+        if (target !== -1)
+            this._model.workspace(target)?.activate(global.get_current_time());
+    }
+
+    _moveFocusedWindow(delta) {
+        const win = global.display.focus_window;
+        if (!win || !isManagedWindow(win))
+            return;
+        const target = this._adjacentGroup(delta);
+        if (target === -1)
+            return;
+        const from = win.get_workspace()?.index();
+
+        this._model.moveWindowToGroup(win, target);
+        // Follow the window. Moving it somewhere you cannot see is a way to
+        // lose it.
+        this._model.workspace(target)?.activate(global.get_current_time());
+        win.activate(global.get_current_time());
+
+        if (from !== undefined)
+            this._sidebar.relayout(from);
+        this._sidebar.relayout(target);
+        this._sidebar.queueRebuild();
+    }
+
     _reloadSidebar() {
         this._sidebar?.destroy();
         this._sidebar = new Sidebar(
@@ -2054,7 +2251,9 @@ export default class WindowGroupsExtension extends Extension {
     disable() {
         this._debug?.destroy();
         this._debug = null;
-        Main.wm.removeKeybinding('search-windows');
+        for (const key of ['search-windows', 'switch-group-up',
+            'switch-group-down', 'move-window-up', 'move-window-down'])
+            Main.wm.removeKeybinding(key);
         this._search?.destroy();
         this._search = null;
         global.display.disconnectObject(this);

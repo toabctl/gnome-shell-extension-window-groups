@@ -15,7 +15,8 @@ itself how its windows are arranged: left alone, tabbed, or tiled.
   when you push the pointer at the left edge. Pin it if you'd rather it
   stayed.
 - **Compact mode** collapses it to icons, expanding on hover.
-- **Search** every open window with <kbd>Super</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd>.
+- **Search** every open window with <kbd>Super</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd>,
+  and switch or move between groups from the keyboard.
 - **X11 works** exactly like Wayland — Mutter presents XWayland clients
   identically, so there is nothing special to do.
 
@@ -50,15 +51,20 @@ gnome-extensions disable tiling-assistant@ubuntu.com
 | --- | --- |
 | click a window | focus it, switching group if needed |
 | click a group name | switch to that group |
-| right-click a group name | rename it |
+| ⋮ on a group, or right-click it | rename, colour, arrangement, dissolve |
 | right-click a window | tag it |
 | drag a window onto a group | move it there |
 | drag a group header | reorder groups |
-| header buttons | colour, arrangement, dissolve |
 | top-left buttons | collapse, search, pin |
 
-The × **dissolves** a group; it never closes anything. The windows move to an
-`Ungrouped` group, created on demand.
+| | |
+| --- | --- |
+| <kbd>Super</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd> | search windows |
+| <kbd>Super</kbd>+<kbd>Ctrl</kbd>+<kbd>↑</kbd>/<kbd>↓</kbd> | switch group |
+| <kbd>Super</kbd>+<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>↑</kbd>/<kbd>↓</kbd> | move window to the next group and follow |
+
+Dissolving a group never closes anything: its windows move to an `Ungrouped`
+group, created on demand.
 
 ---
 
@@ -122,6 +128,16 @@ A reveal is provisional. The pointer must arrive on the sidebar within 1.5 s or
 it hides again; otherwise a pointer resting at the very edge reveals the
 sidebar and nothing ever puts it away.
 
+### Persistent controls live in a menu
+
+Colour, arrangement, rename and dissolve are on a context menu (⋮ or
+right-click), not as icons in the group header. The header is a *transient*
+surface — with auto-hide it appears on a timer and leaves on one — which is
+the wrong home for an irreversible action sitting a few pixels from a control
+you click in passing, and for a multi-step interaction like renaming. A menu
+also replaces two blind cycles with labelled choices you can see before
+committing to.
+
 ### Tags
 
 Right-click a window row to give it a tag. With `auto-group` on, tagging moves
@@ -163,7 +179,6 @@ keybindings and hover from outside a session. See `docs/testing.md`.
 
 ## Not done yet
 
-- Keybindings beyond search.
 - Reordering windows within a group.
 - Multi-monitor: the sidebar is primary-monitor only, and Ubuntu's
   `workspaces-only-on-primary` puts other monitors' windows on every
