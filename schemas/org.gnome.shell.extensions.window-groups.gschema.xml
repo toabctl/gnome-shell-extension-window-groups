@@ -15,6 +15,10 @@
       <summary>Open the window search popup</summary>
       <description>Chrome uses Ctrl+Shift+A, but that belongs to applications; a global grab would take it away from them.</description>
     </key>
+    <key name="restore-dynamic-workspaces" type="b">
+      <default>false</default>
+      <summary>Internal: this extension turned dynamic-workspaces off and should turn it back on</summary>
+    </key>
     <key name="debug-interface" type="b">
       <default>false</default>
       <summary>Export a D-Bus interface for tests to read state and drive the extension</summary>

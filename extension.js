@@ -21,7 +21,9 @@ import Pango from 'gi://Pango';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
 
-import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
+import {
+    Extension, gettext as _,
+} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as DND from 'resource:///org/gnome/shell/ui/dnd.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
@@ -407,6 +409,14 @@ function addTooltip(button, text) {
         label = null;
     };
 
+    // Overriding destroy() beats connecting to the destroy signal: the
+    // guidelines call the latter out, and this keeps teardown next to setup.
+    const inheritedDestroy = button.destroy.bind(button);
+    button.destroy = () => {
+        hide();
+        inheritedDestroy();
+    };
+
     button.connect('notify::hover', () => {
         if (!button.hover) {
             hide();
@@ -423,7 +433,6 @@ function addTooltip(button, text) {
             return GLib.SOURCE_REMOVE;
         });
     });
-    button.connect('destroy', hide);
 }
 
 function iconButton(iconName, tooltip, styleClass = 'wg-icon-button') {
@@ -699,7 +708,7 @@ class GroupSection extends St.BoxLayout {
         header.add_child(this._arrangeButton);
 
         const remove = iconButton('window-close-symbolic',
-            'Delete this group (its windows move to the group above)');
+            _('Dissolve this group; its windows move to Ungrouped'));
         remove.connect('clicked', () => this._model.removeGroup(this._index));
         remove.reactive = this._model.count > 1;
         remove.get_child().style = `color: ${ink};`;
@@ -971,7 +980,7 @@ class WindowSearch {
 
         this._entry = new St.Entry({
             style_class: 'wg-search-entry',
-            hint_text: 'Search windows',
+            hint_text: _('Search windows'),
             can_focus: true,
             x_expand: true,
         });
@@ -980,7 +989,7 @@ class WindowSearch {
         this._container.add_child(this._entry);
 
         this._container.add_child(new St.Label({
-            text: 'Open windows', style_class: 'wg-search-heading',
+            text: _('Open windows'), style_class: 'wg-search-heading',
         }));
 
         this._scroll = new St.ScrollView({
@@ -1059,7 +1068,7 @@ class WindowSearch {
 
         if (scored.length === 0) {
             this._list.add_child(new St.Label({
-                text: 'No windows match', style_class: 'wg-search-empty',
+                text: _('No windows match'), style_class: 'wg-search-empty',
             }));
             return;
         }
@@ -1167,7 +1176,7 @@ class Sidebar {
         toggleRow.add_child(this._toggle);
 
         this._searchButton = iconButton('edit-find-symbolic',
-            'Search windows', 'wg-icon-button wg-toggle');
+            _('Search windows'), 'wg-icon-button wg-toggle');
         this._searchButton.connect('clicked', () => this.search?.toggle());
         toggleRow.add_child(this._searchButton);
 
@@ -1208,7 +1217,7 @@ class Sidebar {
             x_expand: true,
             can_focus: true,
             track_hover: true,
-            child: new St.Label({text: '+  New group', x_align: Clutter.ActorAlign.CENTER}),
+            child: new St.Label({text: _('+  New group'), x_align: Clutter.ActorAlign.CENTER}),
         });
         newGroup.connect('clicked', () => this._model.addGroup());
         this.actor.add_child(newGroup);
@@ -1847,7 +1856,12 @@ class DebugInterface {
                 // actor geometry too, or a test can pass while nothing moved.
                 translationX: this._sidebar?.actor?.translation_x ?? 0,
                 x: this._sidebar?.actor?.x ?? 0,
-                onScreen: (this._sidebar?.actor?.x ?? 0) +
+                // The swing style hides by rotating and hiding the actor,
+                // leaving translation_x at 0 — so position alone says
+                // "on screen" for a panel that is not drawn at all.
+                onScreen: (this._sidebar?.actor?.visible ?? false) &&
+                    (this._sidebar?.actor?.opacity ?? 0) > 0 &&
+                    (this._sidebar?.actor?.x ?? 0) +
                     (this._sidebar?.actor?.translation_x ?? 0) +
                     (this._sidebar?.actor?.width ?? 0) > 0,
                 hoverExpanded: this._sidebar?._hoverExpanded ?? false,
@@ -1881,9 +1895,14 @@ export default class WindowGroupsExtension extends Extension {
 
         // Groups only have stable identity if GNOME stops creating and
         // destroying workspaces underneath us.
-        this._hadDynamicWorkspaces = this._mutterSettings.get_boolean('dynamic-workspaces');
-        if (this._hadDynamicWorkspaces)
+        // Record that *we* turned it off, in our own settings, rather than
+        // snapshotting the live value. The live value is one we may have
+        // written on a previous enable, so a snapshot reads back `false` from
+        // the second cycle onwards and the setting is never restored.
+        if (this._mutterSettings.get_boolean('dynamic-workspaces')) {
+            this._settings.set_boolean('restore-dynamic-workspaces', true);
             this._mutterSettings.set_boolean('dynamic-workspaces', false);
+        }
 
         this._model = new GroupModel(this._settings);
         this._arranger = new Arranger({
@@ -2050,8 +2069,15 @@ export default class WindowGroupsExtension extends Extension {
         this._tags?.destroy();
         this._tags = null;
 
-        if (this._hadDynamicWorkspaces)
+        // workspace-names is deliberately left alone. It holds the group
+        // names, which the user created through this extension's own UI —
+        // restoring a pre-enable snapshot would delete their work every time
+        // the extension is toggled. dynamic-workspaces is different: nobody
+        // asked us to change it, so it goes back.
+        if (this._settings?.get_boolean('restore-dynamic-workspaces')) {
             this._mutterSettings?.set_boolean('dynamic-workspaces', true);
+            this._settings.set_boolean('restore-dynamic-workspaces', false);
+        }
         this._mutterSettings = null;
         this._settings = null;
     }
