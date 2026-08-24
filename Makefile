@@ -4,7 +4,12 @@
 UNITS := model.test.mjs layouts.test.mjs search.test.mjs arranger.test.mjs
 SOURCES := extension.js prefs.js layouts.js search.js model.js arranger.js
 
-.PHONY: check test mutants lint schema integration vm-sync clean
+.PHONY: check test mutants lint schema integration install uninstall vm-sync clean
+
+UUID    := window-groups@toabctl.de
+DESTDIR := $(HOME)/.local/share/gnome-shell/extensions/$(UUID)
+INSTALL_FILES := extension.js prefs.js layouts.js search.js model.js \
+                 arranger.js stylesheet.css metadata.json LICENSE
 
 ## Everything that runs without a compositor.
 check: lint schema test mutants
@@ -34,6 +39,20 @@ schema:
 integration:
 	@./run-lxd.sh sync
 	@./integration-test.sh
+
+## Install for the current user. Log out and back in afterwards: Wayland
+## cannot restart the shell in place.
+install:
+	@mkdir -p "$(DESTDIR)/schemas"
+	@cp $(INSTALL_FILES) "$(DESTDIR)/"
+	@cp schemas/*.gschema.xml "$(DESTDIR)/schemas/"
+	@glib-compile-schemas "$(DESTDIR)/schemas"
+	@echo "installed to $(DESTDIR)"
+	@echo "log out and back in, then: gnome-extensions enable $(UUID)"
+
+uninstall:
+	@rm -rf "$(DESTDIR)"
+	@echo "removed $(DESTDIR)"
 
 vm-sync:
 	@./run-lxd.sh sync
