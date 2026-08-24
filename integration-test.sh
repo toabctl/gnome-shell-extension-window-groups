@@ -25,7 +25,48 @@ guest() {
             GSETTINGS_SCHEMA_DIR="$SCHEMA" "$@"
 }
 
-setting() { guest gsettings set org.gnome.shell.extensions.window-groups "$@"; }
+# Every setting this suite writes is snapshotted on first touch and put back
+# on exit. A test run that leaves the desktop configured differently from how
+# it found it is indistinguishable, later, from a bug — which is exactly what
+# happened when an earlier version left auto-hide switched off.
+declare -A SAVED
+SNAPSHOT_ORDER=()
+
+save_once() {
+    # Separate statements on purpose: in a single `local a=$1 b="$a"`, bash
+    # declares every name before evaluating the later initialisers, so under
+    # `set -u` the reference to $a fails with "unbound variable". bash -n does
+    # not catch it — it is a runtime error.
+    local schema="$1"
+    local key="$2"
+    local id="$schema $key"
+    [ -n "${SAVED[$id]+set}" ] && return
+    SAVED[$id]="$(guest gsettings get "$schema" "$key")"
+    SNAPSHOT_ORDER+=("$id")
+}
+
+restore_all() {
+    local id schema key
+    for id in "${SNAPSHOT_ORDER[@]}"; do
+        schema="${id%% *}"; key="${id#* }"
+        guest gsettings set "$schema" "$key" "${SAVED[$id]}" >/dev/null 2>&1
+    done
+    [ ${#SNAPSHOT_ORDER[@]} -gt 0 ] &&
+        echo "restored ${#SNAPSHOT_ORDER[@]} settings"
+    # Whatever happened, leave the extension running.
+    guest gnome-extensions enable "$UUID" >/dev/null 2>&1
+}
+trap restore_all EXIT
+
+setting() {
+    save_once org.gnome.shell.extensions.window-groups "$1"
+    guest gsettings set org.gnome.shell.extensions.window-groups "$@"
+}
+
+gnome_setting() {
+    save_once "$1" "$2"
+    guest gsettings set "$@"
+}
 
 state() {
     guest gdbus call --session --dest org.gnome.Shell \
@@ -104,8 +145,8 @@ check "still alive afterwards" "True" "$([ -n "$(state)" ] && echo True)"
 echo
 echo "groups"
 setting compact false >/dev/null 2>&1
-guest gsettings set org.gnome.desktop.wm.preferences num-workspaces 3 >/dev/null 2>&1
-guest gsettings set org.gnome.desktop.wm.preferences workspace-names \
+gnome_setting org.gnome.desktop.wm.preferences num-workspaces 3 >/dev/null 2>&1
+gnome_setting org.gnome.desktop.wm.preferences workspace-names \
     "['one','two','three']" >/dev/null 2>&1
 sleep 2
 check "three groups" "3" "$(field "len(d['groups'])")"
@@ -181,7 +222,7 @@ echo "settings this extension does not own"
 # workspace-names holds the group names the user made through our UI, so it is
 # theirs to keep — restoring a pre-enable snapshot would delete their work on
 # every toggle. dynamic-workspaces is the opposite: nobody asked for it.
-guest gsettings set org.gnome.desktop.wm.preferences workspace-names \
+gnome_setting org.gnome.desktop.wm.preferences workspace-names \
     "['keepme']" >/dev/null 2>&1
 guest gnome-extensions disable "$UUID" >/dev/null 2>&1
 sleep 2

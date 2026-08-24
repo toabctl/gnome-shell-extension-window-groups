@@ -372,6 +372,11 @@ Notes:
     make check        # lint + schema + unit tests + mutants, ~7s, no VM
     make integration  # assertions against a real shell in the VM
 
+`integration-test.sh` snapshots every setting it writes and restores them on
+exit. A run that leaves the desktop configured differently from how it found
+it is indistinguishable, later, from a bug — an earlier version left
+`auto-hide` switched off and cost a round of "it stopped working".
+
 Two tiers run without a compositor:
 
 **Pure units.** `layouts.js` (geometry), `search.js` (ranking), `model.js`
