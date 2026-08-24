@@ -1,5 +1,7 @@
 # Window Groups
 
+[![CI](https://github.com/toabctl/gnome-shell-extension-window-groups/actions/workflows/ci.yml/badge.svg)](https://github.com/toabctl/gnome-shell-extension-window-groups/actions/workflows/ci.yml)
+
 A GNOME Shell extension that replaces the dock with a **left sidebar of open
 windows, organised into named groups**. Each group has its own arrangement.
 
