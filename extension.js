@@ -25,7 +25,7 @@ import Shell from 'gi://Shell';
 import St from 'gi://St';
 
 import {
-    Extension, gettext as _,
+    Extension, gettext as _, ngettext,
 } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as DND from 'resource:///org/gnome/shell/ui/dnd.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -640,6 +640,7 @@ class GroupSection extends St.BoxLayout {
         // Chrome fills the group header itself with the group colour rather
         // than showing a separate swatch, so the colour is the label.
         const color = this._model.color(this._index);
+        this._recordRendered(color);
         const ink = contrastOn(color.hex);
         // The border is always present and merely changes colour, so marking
         // a group active cannot shift the layout. St's box-shadow support is
@@ -710,6 +711,7 @@ class GroupSection extends St.BoxLayout {
      *  name, colour or layout means expanding the sidebar again. */
     _buildCompactHeader() {
         const color = this._model.color(this._index);
+        this._recordRendered(color);
         const header = new St.Button({
             style_class: 'wg-compact-header',
             can_focus: true,
@@ -749,6 +751,21 @@ class GroupSection extends St.BoxLayout {
         this._closeMenu();
     }
 
+    /** What this section actually drew. The debug interface otherwise reports
+     *  the model, and a view that has stopped repainting agrees with the
+     *  model on every field -- only the drawn values can catch it. */
+    _recordRendered(color) {
+        this._renderedColor = color.name;
+        this._renderedName = this._model.name(this._index);
+    }
+
+    renderedState() {
+        return {
+            name: this._renderedName ?? '',
+            color: this._renderedColor ?? '',
+        };
+    }
+
     getDragActor() {
         return new St.Label({
             text: this._model.name(this._index),
@@ -771,10 +788,18 @@ class GroupSection extends St.BoxLayout {
         const menu = new PopupMenu.PopupMenu(
             this._menuButton ?? this._nameButton, 0.0, St.Side.LEFT);
         this._menu = menu;
+        // PopupMenu watches its source actor and destroys itself when that
+        // actor goes away. Follow it, so we never destroy it a second time.
+        menu.connect('destroy', () => {
+            if (this._menu === menu)
+                this._menu = null;
+            this._releaseMenuHold();
+        });
         Main.uiGroup.add_child(menu.actor);
         menu.actor.hide();
 
         // The sidebar must not slide away underneath its own menu.
+        this._menuHeld = true;
         this._sidebar.beginBusy();
         this._sidebar.holdOpen(true);
 
@@ -832,27 +857,64 @@ class GroupSection extends St.BoxLayout {
         const dissolve = new PopupMenu.PopupMenuItem(
             count === 0
                 ? _('Dissolve group')
-                : _('Dissolve group (%d windows move to Ungrouped)').format(count));
+                : ngettext(
+                    'Dissolve group (%d window moves to Ungrouped)',
+                    'Dissolve group (%d windows move to Ungrouped)',
+                    count).format(count));
         dissolve.setSensitive(this._model.count > 1);
         dissolve.connect('activate', () => this._model.removeGroup(this._index));
         menu.addMenuItem(dissolve);
 
-        menu.connect('open-state-changed', (_m, open) => {
+        this._menuStateId = menu.connect('open-state-changed', (_m, open) => {
             if (open)
                 return;
-            this._sidebar.holdOpen(false);
-            this._sidebar.endBusy();
-            this._closeMenu();
+            // Release the hold immediately: while it is held rebuild() is a
+            // no-op, so the setting this item just wrote would never reach
+            // the screen. The menu itself is deliberately *not* disposed
+            // here — it is mid-close, and it is cheap to keep until this
+            // section is rebuilt away or the menu is opened again.
+            this._releaseMenuHold();
         });
         menu.open(true);
     }
 
+    /** The hold taken while the menu is up, released exactly once. Both
+     *  closing and being destroyed have to release it: a section destroyed
+     *  with its menu still open leaked the hold, and a leaked hold makes
+     *  rebuild() a no-op for the rest of the session. */
+    _releaseMenuHold() {
+        if (!this._menuHeld)
+            return;
+        this._menuHeld = false;
+        this._sidebar.holdOpen(false);
+        this._sidebar.endBusy();
+    }
+
     _closeMenu() {
+        this._releaseMenuHold();
         if (!this._menu)
             return;
         const menu = this._menu;
         this._menu = null;
-        menu.actor.destroy();
+        if (this._menuStateId) {
+            menu.disconnect(this._menuStateId);
+            this._menuStateId = 0;
+        }
+        // Close without animation before disposing. An animated close eases
+        // the box pointer and destroys it on completion; tearing the actor
+        // down while that is in flight leaves the easing holding a disposed
+        // object, which it complains about on every frame.
+        if (menu.isOpen)
+            menu.close(false);
+        // menu.destroy(), not menu.actor.destroy(). PopupMenu watches its
+        // source actor for 'destroy' and tears itself down when it goes;
+        // destroying the actor alone leaves that watch connected to a menu
+        // whose box pointer is already disposed. The next rebuild destroys
+        // this section -- the source actor's parent -- PopupMenu reacts, and
+        // the exception surfaces inside destroy_all_children(). rebuild()
+        // then aborts before it repopulates, and the sidebar never updates
+        // again: every later rebuild throws in the same place.
+        menu.destroy();
     }
 
     _beginRename() {
@@ -1978,6 +2040,10 @@ class DebugInterface {
         return JSON.stringify({
             pointer: {x: px, y: py},
             groups,
+            // Read back off the actors. Every other field here comes from the
+            // model, so this is the only one that can disagree with what the
+            // extension believes it is showing.
+            rendered: (this._sidebar?._sections ?? []).map(s => s.renderedState()),
             activeGroup: this._model.activeIndex,
             sidebar: {
                 width: this._sidebar?.actor?.width ?? 0,

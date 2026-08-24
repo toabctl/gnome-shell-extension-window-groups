@@ -4,8 +4,8 @@ Four tiers, in descending order of how much you should trust a green result
 and ascending order of what it costs to run.
 
 ```sh
-make check        # tiers 1–2: lint, schema, 87 unit tests, 29 mutants (~7s)
-make integration  # tier 3: 18 assertions against a real shell in a VM
+make check        # tiers 1–2: lint, schema, 80 unit tests, 29 mutants (~7s)
+make integration  # tier 3: 25 assertions against a real shell in a VM
 ```
 
 The organising principle is that **every assertion must be capable of
@@ -19,6 +19,10 @@ oracle that could not:
 - A pixel scan measured the sidebar by walking to the first light pixel, which
   counts any dark window beside it as sidebar.
 - Two test suites were green with the behaviour they named deleted.
+- The debug interface answered every question from the model, so "colours
+  applied" passed for a sidebar that had stopped repainting entirely. `GetState`
+  now also reports what the sections actually drew, which is the only field in
+  it that can disagree with what the extension believes.
 
 ## Tier 1 — pure units
 
@@ -67,6 +71,11 @@ Extracting `Arranger` also surfaced a live bug the first fakes were too
 permissive to catch: it called `win.unmaximize()` with no arguments, which the
 real `Meta.Window` rejects. The flags now travel through `env`, pinned by both
 a test and a mutant.
+
+A GJS exception is not a crash: the shell abandons the callback that threw and
+carries on. So the suite also fails on `already disposed` or `JS ERROR` in the
+shell log during a run. The frozen-sidebar bug was silent apart from one such
+line, while every assertion still passed.
 
 ## Tier 3 — a real shell
 

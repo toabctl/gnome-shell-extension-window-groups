@@ -58,6 +58,10 @@ restore_all() {
 }
 trap restore_all EXIT
 
+# Where the shell's log stood when we started, so the exception scan at the
+# end reads only this run.
+JOURNAL_START="$(lxc exec "$VM" -- date +%s 2>/dev/null || echo 0)"
+
 setting() {
     save_once org.gnome.shell.extensions.window-groups "$1"
     guest gsettings set org.gnome.shell.extensions.window-groups "$@"
@@ -152,8 +156,15 @@ sleep 2
 check "three groups" "3" "$(field "len(d['groups'])")"
 check "named from workspace-names" "one" "$(field "d['groups'][0]['name']")"
 setting colors "['red','green','blue']" >/dev/null 2>&1
-sleep 1
-check "colours applied" "green" "$(field "d['groups'][1]['color']")"
+# Assert what was drawn, not what the model holds. Both come back from the
+# same setting, so the model-side check passed happily for a sidebar that had
+# stopped repainting altogether — an exception during rebuild() left the old
+# actors on screen and every later rebuild threw in the same place.
+await "d['rendered'][1]['color']" green >/dev/null
+check "colours reach the screen" "green" "$(field "d['rendered'][1]['color']")"
+check "names reach the screen" "one" "$(field "d['rendered'][0]['name']")"
+check "the view agrees with the model" "True" \
+    "$(field "[g['color'] for g in d['groups']] == [r['color'] for r in d['rendered']]")"
 
 echo
 echo "dissolving a group rehomes rather than closes"
@@ -250,6 +261,16 @@ check "dynamic-workspaces restored" "true" \
     "$(guest gsettings get org.gnome.mutter dynamic-workspaces)"
 guest gnome-extensions enable "$UUID" >/dev/null 2>&1
 sleep 3
+
+echo
+echo "no exceptions from the shell"
+# A GJS exception does not stop the shell, it just abandons whatever callback
+# threw. The frozen-sidebar bug was exactly that: silent apart from one line
+# here, while every assertion above still passed.
+noise=$(lxc exec "$VM" -- journalctl --since "@$JOURNAL_START" --no-pager -o cat 2>/dev/null |
+    grep -E "already disposed|JS ERROR" |
+    grep -v "COMMAND=" | head -5)
+check "clean shell log" "" "$noise"
 
 echo
 printf '%d passed, %d failed\n' "$PASS" "$FAIL"
