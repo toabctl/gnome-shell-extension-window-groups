@@ -7,7 +7,7 @@
 #   WG_ARRANGEMENTS="['tabbed','free']"  preset per-group arrangements
 set -euo pipefail
 
-UUID="window-groups@tom.devel"
+UUID="window-groups@toabctl.de"
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SANDBOX="${WG_SANDBOX:-$SRC/.sandbox-headless}"
 OUT="$(realpath -m "${1:-$SRC/shot.png}")"

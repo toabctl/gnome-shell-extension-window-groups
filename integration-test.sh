@@ -12,7 +12,7 @@ set -uo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VM="${WG_VM:-wg-vm}"
-UUID="window-groups@tom.devel"
+UUID="window-groups@toabctl.de"
 SCHEMA="/home/ubuntu/.local/share/gnome-shell/extensions/$UUID/schemas"
 
 PASS=0
@@ -70,8 +70,8 @@ gnome_setting() {
 
 state() {
     guest gdbus call --session --dest org.gnome.Shell \
-        --object-path /org/gnome/Shell/Extensions/WindowGroups \
-        --method org.gnome.Shell.Extensions.WindowGroups.GetState 2>/dev/null |
+        --object-path /de/toabctl/WindowGroups \
+        --method de.toabctl.WindowGroups.GetState 2>/dev/null |
         sed -e "s/^('//" -e "s/',)$//" -e 's/\\"/"/g'
 }
 
@@ -159,8 +159,8 @@ echo
 echo "dissolving a group rehomes rather than closes"
 before=$(field "sum(len(g['windows']) for g in d['groups'])")
 guest gdbus call --session --dest org.gnome.Shell \
-    --object-path /org/gnome/Shell/Extensions/WindowGroups \
-    --method org.gnome.Shell.Extensions.WindowGroups.RemoveGroup 1 >/dev/null 2>&1
+    --object-path /de/toabctl/WindowGroups \
+    --method de.toabctl.WindowGroups.RemoveGroup 1 >/dev/null 2>&1
 sleep 2
 check "no windows were closed" "$before" \
     "$(field "sum(len(g['windows']) for g in d['groups'])")"

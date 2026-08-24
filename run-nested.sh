@@ -3,7 +3,7 @@
 # session. See lib-sandbox.sh for what is isolated and why.
 set -euo pipefail
 
-UUID="window-groups@tom.devel"
+UUID="window-groups@toabctl.de"
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SANDBOX="${WG_SANDBOX:-$SRC/.sandbox}"
 DISPLAY_NAME="${WG_WAYLAND_DISPLAY:-wg-test}"

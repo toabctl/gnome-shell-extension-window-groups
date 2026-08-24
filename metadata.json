@@ -1,5 +1,5 @@
 {
-  "uuid": "window-groups@tom.devel",
+  "uuid": "window-groups@toabctl.de",
   "name": "Window Groups",
   "description": "A left sidebar listing open windows in named, coloured groups, modelled on Chrome's vertical tab groups. Each group has its own arrangement. Groups are backed by static workspaces, so Mutter handles showing and hiding and XWayland works unchanged.",
   "shell-version": [
@@ -10,7 +10,7 @@
   ],
   "settings-schema": "org.gnome.shell.extensions.window-groups",
   "version": 1,
-  "url": "https://github.com/tom/window-groups",
-  "gettext-domain": "window-groups",
+  "url": "https://github.com/toabctl/window-groups",
+  "gettext-domain": "window-groups@toabctl.de",
   "version-name": "0.1"
 }

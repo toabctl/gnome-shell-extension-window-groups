@@ -1779,7 +1779,7 @@ class Sidebar {
 
 const DEBUG_IFACE = `
 <node>
-  <interface name="org.gnome.Shell.Extensions.WindowGroups">
+  <interface name="de.toabctl.WindowGroups">
     <method name="GetState">
       <arg type="s" direction="out" name="json"/>
     </method>
@@ -1812,7 +1812,7 @@ class DebugInterface {
         this._tags = tags;
         this._impl = Gio.DBusExportedObject.wrapJSObject(DEBUG_IFACE, this);
         this._impl.export(Gio.DBus.session,
-            '/org/gnome/Shell/Extensions/WindowGroups');
+            '/de/toabctl/WindowGroups');
     }
 
     destroy() {

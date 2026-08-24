@@ -24,7 +24,7 @@
 set -euo pipefail
 
 VM="${WG_VM:-wg-vm}"
-UUID="window-groups@tom.devel"
+UUID="window-groups@toabctl.de"
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IMAGE="${WG_IMAGE:-images:ubuntu/26.04/desktop}"
 EXT_DIR="/home/GUEST/.local/share/gnome-shell/extensions/$UUID"
@@ -166,8 +166,8 @@ wg_dbus() {
     local method="$1"; shift
     as_user gdbus call --session \
         --dest org.gnome.Shell \
-        --object-path /org/gnome/Shell/Extensions/WindowGroups \
-        --method "org.gnome.Shell.Extensions.WindowGroups.$method" "$@" 2>/dev/null
+        --object-path /de/toabctl/WindowGroups \
+        --method "de.toabctl.WindowGroups.$method" "$@" 2>/dev/null
 }
 
 # On the lock screen GNOME runs in unlock-dialog mode, where user extensions

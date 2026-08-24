@@ -494,6 +494,27 @@ way that looks like a code bug. `gnome-extensions info` reports
 before `demo` and `console`, but a VM resumed from an older state can still
 come back locked.
 
+## Identifiers
+
+| | |
+| --- | --- |
+| UUID | `window-groups@toabctl.de` |
+| GSettings schema | `org.gnome.shell.extensions.window-groups` |
+| GSettings path | `/org/gnome/shell/extensions/window-groups/` |
+| D-Bus interface | `de.toabctl.WindowGroups` |
+| D-Bus object path | `/de/toabctl/WindowGroups` |
+
+The UUID's second part must be a namespace you control — GNOME's own example
+is `username.github.io`. The schema id and path are not free choices: the
+review guidelines require the `org.gnome.shell.extensions` base and the
+matching path.
+
+The debug interface deliberately does **not** live under
+`org.gnome.Shell.Extensions.*`. That is GNOME's namespace, not ours to hand
+out interfaces in, even though the object is exported on the shell's own bus
+connection. D-Bus name elements also allow only `[A-Za-z0-9_]`, so it is
+`WindowGroups` rather than `window-groups`.
+
 ## Licence
 
 GPL-3.0-or-later. The full text is in `LICENSE`; each source file carries an
