@@ -167,6 +167,22 @@ check "the view agrees with the model" "True" \
     "$(field "[g['color'] for g in d['groups']] == [r['color'] for r in d['rendered']]")"
 
 echo
+echo "arrangement toggle"
+guest gdbus call --session --dest org.gnome.Shell \
+    --object-path /de/toabctl/WindowGroups \
+    --method de.toabctl.WindowGroups.SetArrangement 0 columns >/dev/null 2>&1
+await "d['rendered'][0]['arrangement']" columns >/dev/null
+check "columns reaches the screen" "columns" \
+    "$(field "d['rendered'][0]['arrangement']")"
+check "the toggle shows it" "True" "$(field "d['rendered'][0]['columnsToggle']")"
+guest gdbus call --session --dest org.gnome.Shell \
+    --object-path /de/toabctl/WindowGroups \
+    --method de.toabctl.WindowGroups.SetArrangement 0 free >/dev/null 2>&1
+await "d['rendered'][0]['arrangement']" free >/dev/null
+check "and back to free" "free" "$(field "d['rendered'][0]['arrangement']")"
+check "the toggle follows" "False" "$(field "d['rendered'][0]['columnsToggle']")"
+
+echo
 echo "dissolving a group rehomes rather than closes"
 before=$(field "sum(len(g['windows']) for g in d['groups'])")
 guest gdbus call --session --dest org.gnome.Shell \
@@ -219,19 +235,37 @@ fi
 echo
 echo "keyboard"
 gnome_setting org.gnome.desktop.wm.preferences num-workspaces 3 >/dev/null 2>&1
+await "len(d['groups'])" 3 >/dev/null
 pointer key super+ctrl+up; pointer key super+ctrl+up   # settle at the top
-before_active=$(field "d['activeGroup']")
-check "starts at the first group" "0" "$before_active"
+await "d['activeGroup']" 0 >/dev/null
+check "starts at the first group" "0" "$(field "d['activeGroup']")"
+
+# Every step below moves to a value it was not already on, so a dropped
+# keystroke fails an assertion. The earlier shape pressed up from the top
+# twice and checked for 0 — which is what it read before pressing, so three
+# of the four checks passed even if no key was delivered at all.
+#
+# Waiting for the value rather than sleeping a fixed second matters just as
+# much: on a loaded VM the switch regularly takes longer than that, and this
+# section's one falsifiable assertion was failing intermittently for being
+# late rather than wrong.
 pointer key super+ctrl+down
-sleep 1
-check "switch-group-down moves down one" "1" "$(field "d['activeGroup']")"
+await "d['activeGroup']" 1 >/dev/null
+check "down moves to the second group" "1" "$(field "d['activeGroup']")"
+pointer key super+ctrl+down
+await "d['activeGroup']" 2 >/dev/null
+check "and on to the third" "2" "$(field "d['activeGroup']")"
 pointer key super+ctrl+up
-sleep 1
-check "switch-group-up moves back" "0" "$(field "d['activeGroup']")"
-# Clamped, not wrapped: repeated presses at the end must not jump to the far
-# side of the list.
+await "d['activeGroup']" 1 >/dev/null
+check "up comes back" "1" "$(field "d['activeGroup']")"
 pointer key super+ctrl+up
-sleep 1
+await "d['activeGroup']" 0 >/dev/null
+check "and back to the first" "0" "$(field "d['activeGroup']")"
+# Clamped, not wrapped: a press at the end must not jump to the far side of
+# the list. A fixed settle, not await — the assertion is that nothing happens,
+# and await would return the instant it read the value already there.
+pointer key super+ctrl+up
+sleep 2
 check "does not wrap past the first group" "0" "$(field "d['activeGroup']")"
 
 echo

@@ -10,7 +10,8 @@ itself how its windows are arranged: left alone, or tiled in columns.
 
 - **Groups** with names and colours. Drag a window between them, drag a group
   header to reorder.
-- **Per-group layouts** — leave windows alone, or tile them in columns.
+- **Per-group layouts** — leave windows alone, or tile them in columns,
+  toggled from the group header.
 - **Auto-hide** by default: the sidebar stays out of the way and slides in
   when you push the pointer at the left edge. Pin it if you'd rather it
   stayed.
@@ -51,7 +52,8 @@ gnome-extensions disable tiling-assistant@ubuntu.com
 | --- | --- |
 | click a window | focus it, switching group if needed |
 | click a group name | switch to that group |
-| ⋮ on a group, or right-click it | rename, colour, arrangement, dissolve |
+| the tile button on a group | switch it between free and columns |
+| ⋮ on a group, or right-click it | rename, colour, dissolve |
 | right-click a window | tag it |
 | drag a window onto a group | move it there |
 | drag a group header | reorder groups |
@@ -128,15 +130,18 @@ A reveal is provisional. The pointer must arrive on the sidebar within 1.5 s or
 it hides again; otherwise a pointer resting at the very edge reveals the
 sidebar and nothing ever puts it away.
 
-### Persistent controls live in a menu
+### What lives in the menu, and what does not
 
-Colour, arrangement, rename and dissolve are on a context menu (⋮ or
-right-click), not as icons in the group header. The header is a *transient*
-surface — with auto-hide it appears on a timer and leaves on one — which is
-the wrong home for an irreversible action sitting a few pixels from a control
-you click in passing, and for a multi-step interaction like renaming. A menu
-also replaces two blind cycles with labelled choices you can see before
-committing to.
+Colour, rename and dissolve are on a context menu (⋮ or right-click) rather
+than as icons in the group header. The header is a *transient* surface — with
+auto-hide it appears on a timer and leaves on one — which is the wrong home
+for an irreversible action sitting a few pixels from a control you click in
+passing, and for a multi-step interaction like renaming.
+
+Arrangement is the exception, and sits in the header as a toggle. It is
+neither irreversible nor multi-step, there are exactly two states, and the
+button shows which one you are in — so it is a switch, not a blind cycle.
+Behind a submenu it was three clicks deep and read as broken.
 
 ### Tags
 
@@ -151,7 +156,7 @@ restart. i3 and sway only offer rule-based `assign` for the same reason.
 
 ```sh
 make check        # lint, schema, 80 unit tests, 29 mutants — ~7s, no VM
-make integration  # 25 assertions against a real shell in a VM
+make integration  # 31 assertions against a real shell in a VM
 ```
 
 Four modules import nothing from GNOME and are unit tested: `layouts.js`

@@ -5,7 +5,7 @@ and ascending order of what it costs to run.
 
 ```sh
 make check        # tiers 1–2: lint, schema, 80 unit tests, 29 mutants (~7s)
-make integration  # tier 3: 25 assertions against a real shell in a VM
+make integration  # tier 3: 31 assertions against a real shell in a VM
 ```
 
 The organising principle is that **every assertion must be capable of
@@ -23,6 +23,12 @@ oracle that could not:
   applied" passed for a sidebar that had stopped repainting entirely. `GetState`
   now also reports what the sections actually drew, which is the only field in
   it that can disagree with what the extension believes.
+- The keyboard section pressed up from the top group and asserted it was still
+  on the top group. Three of its four checks passed whether or not a single
+  keystroke was delivered; only the fourth could fail, and it did, sporadically
+  — for arriving late against a fixed one-second sleep rather than for being
+  wrong. Every step now moves to a value it was not already on, and waits for
+  it.
 
 ## Tier 1 — pure units
 

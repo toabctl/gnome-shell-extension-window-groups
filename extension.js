@@ -79,10 +79,13 @@ const BUTTON_ICON_SIZE = 14;
  *  imports nothing from GNOME and is unit tested separately. */
 const ARRANGEMENTS = ['free', 'columns'];
 
-const ARRANGEMENT_LABEL = {
-    'free': 'Free',
-    'columns': 'Columns',
-};
+/** With exactly two arrangements the choice is a boolean, so the header
+ *  carries a toggle rather than a menu: one click each way, and the button
+ *  itself shows which way the group is set. A menu was the right home for
+ *  dissolve and rename -- irreversible and multi-step respectively -- but
+ *  tiling is neither, and burying a cheap reversible switch three clicks deep
+ *  made it read as broken. */
+const COLUMNS_ICON = 'view-dual-symbolic';
 
 /** Group colours, modelled on Chrome's tab groups, grey first as its default. */
 const GROUP_COLORS = [
@@ -167,12 +170,6 @@ class GroupModel {
         const values = this._padded(this._settings.get_strv('arrangements'), 'free');
         values[index] = value;
         this._settings.set_strv('arrangements', values);
-    }
-
-    cycleArrangement(index) {
-        const next = (ARRANGEMENTS.indexOf(this.arrangement(index)) + 1) % ARRANGEMENTS.length;
-        this.setArrangement(index, ARRANGEMENTS[next]);
-        return ARRANGEMENTS[next];
     }
 
     color(index) {
@@ -679,6 +676,16 @@ class GroupSection extends St.BoxLayout {
         });
         header.add_child(this._nameButton);
 
+        this._arrangeButton = iconButton(COLUMNS_ICON,
+            _('Tile this group in columns'), 'wg-icon-button');
+        this._arrangeButton.toggle_mode = true;
+        this._arrangeButton.checked =
+            this._model.arrangement(this._index) === 'columns';
+        this._arrangeButton.get_child().style = `color: ${ink};`;
+        this._arrangeButton.connect('clicked', button =>
+            this._setArrangement(button.checked ? 'columns' : 'free'));
+        header.add_child(this._arrangeButton);
+
         // One visible affordance for the whole menu. Right-clicking works
         // too, but an interaction with no affordance is one nobody finds.
         this._menuButton = iconButton('view-more-symbolic',
@@ -747,6 +754,14 @@ class GroupSection extends St.BoxLayout {
         this._header = header;
     }
 
+    _setArrangement(kind) {
+        this._model.setArrangement(this._index, kind);
+        // Stale ratios belong to the previous layout's slot count.
+        this._model.setLayoutState(this._index, {});
+        this._sidebar.relayout(this._index);
+        this._sidebar.queueRebuild();
+    }
+
     on_destroy() {
         this._closeMenu();
     }
@@ -757,12 +772,15 @@ class GroupSection extends St.BoxLayout {
     _recordRendered(color) {
         this._renderedColor = color.name;
         this._renderedName = this._model.name(this._index);
+        this._renderedArrangement = this._model.arrangement(this._index);
     }
 
     renderedState() {
         return {
             name: this._renderedName ?? '',
             color: this._renderedColor ?? '',
+            arrangement: this._renderedArrangement ?? '',
+            columnsToggle: this._arrangeButton?.checked ?? false,
         };
     }
 
@@ -826,30 +844,6 @@ class GroupSection extends St.BoxLayout {
             colors.menu.addMenuItem(item);
         }
         menu.addMenuItem(colors);
-
-        const layouts = new PopupMenu.PopupSubMenuMenuItem(
-            _('Arrangement: %s').format(
-                ARRANGEMENT_LABEL[this._model.arrangement(this._index)]));
-        for (const kind of ARRANGEMENTS) {
-            const item = new PopupMenu.PopupMenuItem(ARRANGEMENT_LABEL[kind]);
-            if (kind === this._model.arrangement(this._index))
-                item.setOrnament(PopupMenu.Ornament.DOT);
-            item.connect('activate', () => {
-                this._model.setArrangement(this._index, kind);
-                // Stale ratios belong to the previous layout's slot count.
-                this._model.setLayoutState(this._index, {});
-                // Switch to the group as well. Rearranging windows you cannot
-                // see is indistinguishable from the menu doing nothing, which
-                // is exactly how it was reported.
-                if (this._index !== this._model.activeIndex)
-                    this._model.workspace(this._index)?.activate(
-                        global.get_current_time());
-                this._sidebar.relayout(this._index);
-                this._sidebar.queueRebuild();
-            });
-            layouts.menu.addMenuItem(item);
-        }
-        menu.addMenuItem(layouts);
 
         menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
