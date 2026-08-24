@@ -1,0 +1,115 @@
+# Tiers 1 and 2 only: unit tests, the fake shell, and the mutation gate.
+#
+# Tiers 3 and 4 need a compositor and a KVM-capable machine, so they stay in
+# `make integration` on a workstation. Running a subset in CI and calling it
+# "tested" would be worse than being explicit about the split.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install GLib tooling
+        # glib-compile-schemas validates the settings schema. A malformed one
+        # otherwise surfaces as a silent settings failure inside the shell.
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libglib2.0-bin
+
+      - name: Lint and validate the schema
+        run: make lint schema
+
+      - name: Unit tests
+        run: make test
+
+      - name: Mutation gate
+        # A green suite proves nothing until it can fail. Every mutant must be
+        # killed by at least one test.
+        run: make mutants
+
+  metadata:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check metadata.json against the review guidelines
+        run: |
+          python3 - <<'PY'
+          import json, re, sys, pathlib
+
+          m = json.loads(pathlib.Path('metadata.json').read_text())
+          errors = []
+
+          for key in ('uuid', 'name', 'description', 'shell-version'):
+              if not m.get(key):
+                  errors.append(f'metadata.json is missing {key}')
+
+          uuid = m.get('uuid', '')
+          if '@' not in uuid:
+              errors.append('uuid must be of the form name@namespace')
+          else:
+              for part in uuid.split('@', 1):
+                  if not re.fullmatch(r'[A-Za-z0-9._-]+', part):
+                      errors.append(f'uuid part {part!r} has illegal characters')
+
+          schema = m.get('settings-schema')
+          if schema and not schema.startswith('org.gnome.shell.extensions'):
+              errors.append('settings-schema must start with org.gnome.shell.extensions')
+
+          if not isinstance(m.get('version'), int):
+              errors.append('version must be an integer')
+
+          # The extension must ship the schema it declares.
+          if schema:
+              xml = pathlib.Path('schemas').glob('*.gschema.xml')
+              found = any(f'id="{schema}"' in p.read_text() for p in xml)
+              if not found:
+                  errors.append(f'no shipped schema declares id="{schema}"')
+
+          if not pathlib.Path('LICENSE').exists():
+              errors.append('LICENSE is missing')
+          elif 'TERMS AND CONDITIONS' not in pathlib.Path('LICENSE').read_text():
+              errors.append('LICENSE has no licence text in it')
+
+          for line in errors:
+              print(f'::error::{line}')
+          sys.exit(1 if errors else 0)
+          PY
+
+      - name: Every source file carries an SPDX header
+        run: |
+          missing=0
+          for f in *.js; do
+            grep -q 'SPDX-License-Identifier' "$f" || { echo "::error file=$f::no SPDX header"; missing=1; }
+          done
+          exit $missing
+
+      - name: The shell and prefs processes stay separate
+        run: |
+          # prefs.js runs outside gnome-shell and extension.js runs inside it;
+          # importing the wrong toolkit fails at runtime, not at parse time.
+          fail=0
+          grep -nE "gi://(St|Clutter|Meta|Shell)\b" prefs.js &&
+            { echo "::error file=prefs.js::imports a shell-only library"; fail=1; }
+          grep -nE "gi://(Gtk|Gdk|Adw)\b" extension.js &&
+            { echo "::error file=extension.js::imports a prefs-only library"; fail=1; }
+          for shared in layouts.js search.js model.js arranger.js; do
+            grep -nE "gi://" "$shared" &&
+              { echo "::error file=$shared::shared modules must import no GI libraries"; fail=1; }
+          done
+          exit $fail

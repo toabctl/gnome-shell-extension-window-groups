@@ -372,6 +372,11 @@ Notes:
     make check        # lint + schema + unit tests + mutants, ~7s, no VM
     make integration  # assertions against a real shell in the VM
 
+CI runs `make check` plus metadata, SPDX and process-isolation checks. It
+deliberately does **not** run the integration suite: that needs a compositor
+and a KVM-capable machine, and running a subset while calling it "tested"
+would be worse than being explicit about the split.
+
 `integration-test.sh` snapshots every setting it writes and restores them on
 exit. A run that leaves the desktop configured differently from how it found
 it is indistinguishable, later, from a bug — an earlier version left

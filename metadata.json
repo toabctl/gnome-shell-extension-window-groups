@@ -10,7 +10,7 @@
   ],
   "settings-schema": "org.gnome.shell.extensions.window-groups",
   "version": 1,
-  "url": "https://github.com/toabctl/window-groups",
+  "url": "https://github.com/toabctl/gnome-shell-extension-window-groups",
   "gettext-domain": "window-groups@toabctl.de",
   "version-name": "0.1"
 }
